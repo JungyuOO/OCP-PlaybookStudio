@@ -1,0 +1,2 @@
+[console_scripts]
+play-book-studio = play_book_studio.cli:main
