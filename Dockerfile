@@ -22,13 +22,6 @@ RUN mkdir -p /app/artifacts /app/reports /app/tmp /app/tmp_source
 RUN pip install --upgrade pip setuptools wheel && \
     pip install -e .
 
-FROM backend-base AS backend
-
-EXPOSE 8765
-
-CMD ["python", "-m", "play_book_studio.cli", "ui", "--no-browser", "--host", "0.0.0.0", "--port", "8765"]
-
-
 FROM node:22-bookworm-slim AS frontend-build
 
 WORKDIR /app/presentation-ui
@@ -41,12 +34,10 @@ COPY presentation-ui /app/presentation-ui
 RUN npm run build
 
 
-FROM node:22-bookworm-slim AS frontend
+FROM backend-base AS backend
 
-WORKDIR /app/presentation-ui
+COPY --from=frontend-build /app/presentation-ui/dist /app/presentation-ui/dist
 
-COPY --from=frontend-build /app/presentation-ui /app/presentation-ui
+EXPOSE 8765
 
-EXPOSE 5173
-
-CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173", "--strictPort"]
+CMD ["python", "-m", "play_book_studio.cli", "ui", "--no-browser", "--host", "0.0.0.0", "--port", "8765"]
