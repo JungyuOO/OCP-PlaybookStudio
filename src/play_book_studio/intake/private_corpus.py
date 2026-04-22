@@ -7,6 +7,7 @@ from typing import Any
 
 from play_book_studio.config.settings import Settings, load_settings
 from play_book_studio.ingestion.chunking import chunk_sections
+from play_book_studio.ingestion.json_io import write_jsonl_rows
 from play_book_studio.ingestion.models import NormalizedSection
 from play_book_studio.ingestion.sentence_model import load_sentence_model
 from play_book_studio.intake.models import CustomerPackDraftRecord
@@ -41,10 +42,7 @@ def customer_pack_private_manifest_path(settings: Settings, draft_id: str) -> Pa
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _review_status(record: CustomerPackDraftRecord) -> str:

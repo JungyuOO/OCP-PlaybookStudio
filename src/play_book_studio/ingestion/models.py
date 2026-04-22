@@ -122,11 +122,6 @@ def compact_chunk_corpus_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def chunk_corpus_bm25_row(chunk_row: dict[str, Any]) -> dict[str, Any]:
     chunk_type = str(chunk_row.get("chunk_type", "reference"))
-    translation_status = str(
-        chunk_row.get("translation_status")
-        or chunk_row.get("translation_stage")
-        or "approved_ko"
-    )
     return {
         "chunk_id": chunk_row["chunk_id"],
         "book_slug": chunk_row["book_slug"],
@@ -142,10 +137,6 @@ def chunk_corpus_bm25_row(chunk_row: dict[str, Any]) -> dict[str, Any]:
         "source_lane": chunk_row["source_lane"],
         "source_type": chunk_row["source_type"],
         "source_collection": chunk_row["source_collection"],
-        "product": str(chunk_row.get("product") or "openshift"),
-        "version": str(chunk_row.get("version") or "4.20"),
-        "locale": str(chunk_row.get("locale") or "ko"),
-        "translation_status": translation_status,
         "review_status": str(chunk_row.get("review_status") or "unreviewed"),
         "trust_score": float(chunk_row.get("trust_score", 1.0) or 1.0),
         "semantic_role": (

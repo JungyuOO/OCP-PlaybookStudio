@@ -17,6 +17,7 @@ from play_book_studio.config.settings import Settings
 from .chunking import chunk_sections
 from .collector import collect_entry, entry_with_collected_metadata, raw_html_path
 from .data_quality import build_playbook_reader_grade_audit_for_dirs
+from .json_io import write_jsonl_rows
 from .manifest import read_manifest
 from .models import CONTENT_STATUS_TRANSLATED_KO_DRAFT, SourceManifestEntry
 from .normalize import extract_document_ast, project_normalized_sections
@@ -52,10 +53,7 @@ def _playbook_books_dir(settings: Settings) -> Path:
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:

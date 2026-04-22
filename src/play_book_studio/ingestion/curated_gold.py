@@ -24,6 +24,7 @@ from play_book_studio.canonical import (
 from play_book_studio.config.settings import Settings
 from play_book_studio.config.validation import read_jsonl
 
+from .json_io import write_jsonl_rows
 from .chunking import chunk_sections
 from .graph_sidecar import (
     graph_sidecar_compact_artifact_status,
@@ -529,10 +530,7 @@ def build_curated_etcd_document() -> CanonicalDocumentAst:
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _read_jsonl_safe(path: Path) -> list[dict[str, object]]:

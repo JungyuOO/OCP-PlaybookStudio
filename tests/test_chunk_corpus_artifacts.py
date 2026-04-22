@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from play_book_studio.ingestion.json_io import dump_compact_json
 from play_book_studio.ingestion.models import ChunkRecord, chunk_corpus_bm25_row
 
 
@@ -89,8 +90,21 @@ def test_chunk_corpus_bm25_row_backfills_defaults_for_compact_rows() -> None:
 
     assert bm25_row["chunk_id"] == "chunk-1"
     assert bm25_row["book_slug"] == "advanced_networking"
-    assert bm25_row["translation_status"] == "approved_ko"
-    assert bm25_row["product"] == "openshift"
-    assert bm25_row["version"] == "4.20"
-    assert bm25_row["locale"] == "ko"
+    assert "translation_status" not in bm25_row
+    assert "product" not in bm25_row
+    assert "version" not in bm25_row
+    assert "locale" not in bm25_row
     assert bm25_row["semantic_role"] == "procedure"
+
+
+def test_dump_compact_json_uses_compact_separators() -> None:
+    payload = {
+        "book_slug": "advanced_networking",
+        "section_path": ["Networking", "Egress IP"],
+        "trust_score": 0.98,
+    }
+
+    assert dump_compact_json(payload) == (
+        '{"book_slug":"advanced_networking","section_path":["Networking","Egress IP"],'
+        '"trust_score":0.98}'
+    )

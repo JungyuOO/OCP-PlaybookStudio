@@ -12,6 +12,7 @@ from play_book_studio.ingestion.graph_sidecar import (
     graph_sidecar_compact_artifact_status,
     refresh_active_runtime_graph_artifacts,
 )
+from play_book_studio.ingestion.json_io import write_jsonl_rows
 
 
 TOPIC_PLAYBOOK_SOURCE_TYPE = "topic_playbook"
@@ -282,10 +283,7 @@ def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
 
 
 def _write_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _stringify(value: Any) -> str:

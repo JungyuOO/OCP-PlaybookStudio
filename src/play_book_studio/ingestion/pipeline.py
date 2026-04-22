@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from play_book_studio.canonical import project_playbook_document
+from .json_io import write_jsonl_rows
 from .audit_rules import (
     LANGUAGE_FALLBACK_RE,
     body_language_guess,
@@ -50,10 +51,7 @@ from play_book_studio.config.settings import HIGH_VALUE_SLUGS, Settings
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _write_jsonl_targets(paths: tuple[Path, ...], rows: list[dict]) -> None:

@@ -23,6 +23,7 @@ from .graph_sidecar import (
     graph_sidecar_compact_artifact_status,
     refresh_active_runtime_graph_artifacts,
 )
+from .json_io import write_jsonl_rows
 from .manifest import read_manifest, write_manifest
 from .models import ChunkRecord, SourceManifestEntry, chunk_corpus_bm25_row, compact_chunk_corpus_row
 from .qdrant_store import upsert_chunks
@@ -71,10 +72,7 @@ def _draft_playbook_books_dir(settings: Settings) -> Path:
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    write_jsonl_rows(path, rows)
 
 
 def _read_jsonl_safe(path: Path) -> list[dict[str, object]]:
