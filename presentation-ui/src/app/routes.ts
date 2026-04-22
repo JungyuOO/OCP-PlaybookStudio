@@ -8,14 +8,23 @@ export const ROUTES = {
   pbsPlaybookLibrary: '/playbook-library',
   pbsControlTower: '/playbook-library/control-tower',
   pbsRepository: '/playbook-library/repository',
-  partnerHome: '/partner',
-  partnerWorkspace: '/partner/workspace',
-  partnerLibrary: '/partner/library',
-  partnerViewer: '/partner/viewer',
-  partnerDetails: '/partner/details',
+  opsHome: '/ops',
+  opsWorkspaces: '/ops/workspaces',
+  opsConnections: '/ops/connections',
+  opsOverview: '/ops/overview',
+  opsResources: '/ops/resources',
+  opsChat: '/ops/chat',
+  opsActions: '/ops/actions',
+  opsScm: '/ops/scm',
+  opsDetails: '/ops/details',
+  partnerHome: '/ops',
+  partnerWorkspace: '/ops/workspaces',
+  partnerLibrary: '/ops/resources',
+  partnerViewer: '/ops/chat',
+  partnerDetails: '/ops/details',
 } as const;
 
-export type SharedLandingTab = 'pbs' | 'partner';
+export type SharedLandingTab = 'pbs' | 'ops';
 
 export const RESERVED_PBS_PATH_PREFIXES = [
   ROUTES.pbsPlaybookLibrary,
@@ -24,15 +33,19 @@ export const RESERVED_PBS_PATH_PREFIXES = [
 ] as const;
 
 export const PARTNER_NAMESPACE_PATHS = [
-  ROUTES.partnerHome,
-  ROUTES.partnerWorkspace,
-  ROUTES.partnerLibrary,
-  ROUTES.partnerViewer,
-  ROUTES.partnerDetails,
+  ROUTES.opsHome,
+  ROUTES.opsWorkspaces,
+  ROUTES.opsConnections,
+  ROUTES.opsOverview,
+  ROUTES.opsResources,
+  ROUTES.opsChat,
+  ROUTES.opsActions,
+  ROUTES.opsScm,
+  ROUTES.opsDetails,
 ] as const;
 
 export function normalizeSharedLandingTab(value: string | null | undefined): SharedLandingTab {
-  return value === 'partner' ? 'partner' : 'pbs';
+  return value === 'ops' ? 'ops' : 'pbs';
 }
 
 export function buildSharedLandingHref(tab: SharedLandingTab = 'pbs'): string {

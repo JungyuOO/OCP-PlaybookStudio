@@ -7,17 +7,18 @@ export function PartnerLaneHero() {
   return (
     <div className="partner-lane-hero glass-panel">
       <div className="partner-lane-copy">
-        <span className="partner-lane-eyebrow">Partner Lane</span>
-        <h2 className="partner-lane-title">Sibling namespace, not PBS takeover.</h2>
+        <span className="partner-lane-eyebrow">OCP Ops</span>
+        <h2 className="partner-lane-title">Operational lane, not document takeover.</h2>
         <p className="partner-lane-description">
-          상대 프로젝트는 shared landing에서 함께 소개되지만, 실제 기능 surface는
-          <strong> `/partner/*` </strong>
-          아래에서 분기됩니다. 이렇게 해야 PBS runtime truth와 route ownership이 깨지지 않습니다.
+          This lane is reserved for workspace-aware OpenShift operations.
+          <strong> `/ops/*` </strong>
+          will carry connections, overview, resources, operational chat, actions, and SCM without
+          colliding with PlayBookStudio document routes.
         </p>
       </div>
       <div className="partner-lane-actions">
         <Link to={ROUTES.partnerHome} className="partner-primary-link">
-          <span>Open Partner Lane</span>
+          <span>Open OCP Ops</span>
           <ArrowRight size={18} />
         </Link>
         <Link to={ROUTES.partnerDetails} className="partner-secondary-link">
@@ -56,9 +57,10 @@ export function PartnerGuardRail() {
       <div>
         <h3>Merge-ready guardrail</h3>
         <p>
-          PBS는 기존 경로
+          PlayBookStudio keeps
           <strong> `/studio`, `/llmwikibook`, `/playbook-library*` </strong>
-          를 그대로 유지하고, partner 기능만 sibling subtree로 받아들입니다.
+          while OCP Ops grows as a sibling subtree rooted at
+          <strong> `/ops`</strong>.
         </p>
       </div>
     </div>

@@ -17,6 +17,14 @@ from play_book_studio.app.server_chat import (
 )
 from play_book_studio.app.server_routes import (
     resolve_viewer_html as _resolve_viewer_html,
+    handle_actions_audit_list as _handle_actions_audit_list_request,
+    handle_actions_executions_list as _handle_actions_executions_list_request,
+    handle_actions_preview as _handle_actions_preview_request,
+    handle_actions_request_approve as _handle_actions_request_approve_request,
+    handle_actions_request_execute as _handle_actions_request_execute_request,
+    handle_actions_request_reject as _handle_actions_request_reject_request,
+    handle_actions_requests_create as _handle_actions_requests_create_request,
+    handle_actions_requests_list as _handle_actions_requests_list_request,
     handle_data_control_room as _handle_data_control_room_request,
     handle_data_control_room_chunks as _handle_data_control_room_chunks_request,
     handle_debug_chat_log as _handle_debug_chat_log_request,
@@ -37,6 +45,19 @@ from play_book_studio.app.server_routes import (
     handle_customer_pack_plan as _handle_customer_pack_plan_request,
     handle_customer_pack_support_matrix as _handle_customer_pack_support_matrix_request,
     handle_customer_pack_upload_draft as _handle_customer_pack_upload_draft_request,
+    handle_ocp_connect as _handle_ocp_connect_request,
+    handle_ocp_disconnect as _handle_ocp_disconnect_request,
+    handle_ocp_lease_refresh as _handle_ocp_lease_refresh_request,
+    handle_ocp_lease_status as _handle_ocp_lease_status_request,
+    handle_ocp_metrics as _handle_ocp_metrics_request,
+    handle_ocp_namespaces as _handle_ocp_namespaces_request,
+    handle_ocp_overview as _handle_ocp_overview_request,
+    handle_ocp_resource_detail as _handle_ocp_resource_detail_request,
+    handle_ocp_resources as _handle_ocp_resources_request,
+    handle_ocp_profiles as _handle_ocp_profiles_request,
+    handle_ocp_status as _handle_ocp_status_request,
+    handle_ocp_test as _handle_ocp_test_request,
+    handle_ops_chat as _handle_ops_chat_request,
     handle_repository_favorites as _handle_repository_favorites_request,
     handle_repository_favorites_remove as _handle_repository_favorites_remove_request,
     handle_repository_favorites_save as _handle_repository_favorites_save_request,
@@ -44,6 +65,13 @@ from play_book_studio.app.server_routes import (
     handle_repository_official_materialize_request as _handle_repository_official_materialize_request,
     handle_repository_search as _handle_repository_search_request,
     handle_repository_unanswered as _handle_repository_unanswered_request,
+    handle_scm_connections_create as _handle_scm_connections_create_request,
+    handle_scm_connections_list as _handle_scm_connections_list_request,
+    handle_scm_deployment_plan as _handle_scm_deployment_plan_request,
+    handle_scm_oauth_start as _handle_scm_oauth_start_request,
+    handle_scm_repositories_create as _handle_scm_repositories_create_request,
+    handle_scm_repositories_list as _handle_scm_repositories_list_request,
+    handle_scm_repository_update as _handle_scm_repository_update_request,
     handle_runtime_figures as _handle_runtime_figures_request,
     handle_source_meta as _handle_source_meta_request,
     handle_viewer_document as _handle_viewer_document_request,
@@ -51,6 +79,8 @@ from play_book_studio.app.server_routes import (
     handle_wiki_user_overlay_remove as _handle_wiki_user_overlay_remove_request,
     handle_wiki_user_overlay_save as _handle_wiki_user_overlay_save_request,
     handle_wiki_user_overlays as _handle_wiki_user_overlays_request,
+    handle_workspaces as _handle_workspaces_request,
+    handle_workspaces_create as _handle_workspaces_create_request,
 )
 from play_book_studio.app.server_support import (
     DATA_CONTROL_ROOM_CACHE_TTL_SECONDS,
@@ -104,7 +134,7 @@ def _build_handler(
             parsed_request = urlparse(self.path)
             request_path = parsed_request.path
             started_at = time.monotonic()
-            if request_path.startswith("/assets/") or request_path in {"/", "/favicon.svg", "/studio", "/workspace", "/playbook-library", "/details"}:
+            if request_path.startswith("/assets/") or request_path in {"/", "/favicon.svg", "/studio", "/workspace", "/playbook-library", "/details", "/ops"}:
                 asset_path = _resolve_frontend_asset(
                     root_dir,
                     request_path if request_path.startswith("/assets/") or request_path == "/favicon.svg" else "/index.html",
@@ -181,6 +211,68 @@ def _build_handler(
             if request_path == "/api/repositories/favorites":
                 self._handle_repository_favorites(parsed_request.query)
                 return
+            if request_path == "/api/v1/auth/ocp/profiles":
+                self._handle_ocp_profiles(parsed_request.query)
+                return
+            if request_path == "/api/v1/actions/requests":
+                self._handle_actions_requests_list(parsed_request.query)
+                return
+            if request_path == "/api/v1/actions/executions":
+                self._handle_actions_executions_list(parsed_request.query)
+                return
+            if request_path == "/api/v1/actions/audit":
+                self._handle_actions_audit_list(parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/oauth/") and request_path.endswith("/start"):
+                provider = request_path.removeprefix("/api/v1/oauth/").removesuffix("/start").strip("/")
+                self._handle_scm_oauth_start(provider, parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/auth/ocp/status/"):
+                connection_id = request_path.removeprefix("/api/v1/auth/ocp/status/").strip()
+                self._handle_ocp_status(connection_id)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/connections"):
+                workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/connections").strip("/")
+                self._handle_scm_connections_list(workspace_id)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/repositories"):
+                workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
+                self._handle_scm_repositories_list(workspace_id)
+                return
+            if request_path == "/api/v1/auth/ocp/lease/status":
+                self._handle_ocp_lease_status(parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/ocp/overview/"):
+                connection_id = request_path.removeprefix("/api/v1/ocp/overview/").strip()
+                self._handle_ocp_overview(connection_id)
+                return
+            if request_path.startswith("/api/v1/ocp/metrics/"):
+                connection_id = request_path.removeprefix("/api/v1/ocp/metrics/").strip()
+                self._handle_ocp_metrics(connection_id, parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/ocp/namespaces/"):
+                connection_id = request_path.removeprefix("/api/v1/ocp/namespaces/").strip()
+                self._handle_ocp_namespaces(connection_id)
+                return
+            if request_path.startswith("/api/v1/ocp/resources/"):
+                connection_id = request_path.removeprefix("/api/v1/ocp/resources/").strip()
+                self._handle_ocp_resources(connection_id, parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/ocp/resource-detail/"):
+                connection_id = request_path.removeprefix("/api/v1/ocp/resource-detail/").strip()
+                self._handle_ocp_resource_detail(connection_id, parsed_request.query)
+                return
+            if request_path == "/api/v1/workspaces":
+                self._handle_workspaces(parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/connections"):
+                workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/connections").strip("/")
+                self._handle_scm_connections_list(workspace_id)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/repositories"):
+                workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
+                self._handle_scm_repositories_list(workspace_id)
+                return
             if request_path == "/api/wiki-overlays":
                 self._handle_wiki_user_overlays(parsed_request.query)
                 return
@@ -249,6 +341,86 @@ def _build_handler(
             if self.path == "/api/repositories/favorites":
                 self._handle_repository_favorites_save(payload)
                 return
+            if self.path == "/api/v1/auth/ocp/connect":
+                self._handle_ocp_connect(payload)
+                return
+            request_path = urlparse(self.path).path
+            request_query = urlparse(self.path).query
+            if request_path.startswith("/api/v1/oauth/") and request_path.endswith("/start"):
+                provider = request_path.removeprefix("/api/v1/oauth/").removesuffix("/start").strip("/")
+                self._handle_scm_oauth_start(provider, request_query)
+                return
+            if self.path == "/api/v1/actions/preview":
+                self._handle_actions_preview(payload)
+                return
+            if self.path == "/api/v1/actions/requests":
+                self._handle_actions_requests_create(payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/scm/connections"):
+                workspace_id = self.path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/connections").strip("/")
+                self._handle_scm_connections_create(workspace_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/scm/repositories"):
+                workspace_id = self.path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
+                self._handle_scm_repositories_create(workspace_id, payload)
+                return
+            if self.path == "/api/v1/auth/ocp/disconnect":
+                self._handle_ocp_disconnect(payload)
+                return
+            if self.path == "/api/v1/auth/ocp/test":
+                self._handle_ocp_test(payload)
+                return
+            if self.path == "/api/v1/auth/ocp/lease/refresh":
+                self._handle_ocp_lease_refresh(payload)
+                return
+            if self.path.endswith("/approve") and self.path.startswith("/api/v1/actions/requests/"):
+                request_id = self.path.removeprefix("/api/v1/actions/requests/").removesuffix("/approve").strip("/")
+                self._handle_actions_request_approve(request_id, payload)
+                return
+            if self.path.endswith("/reject") and self.path.startswith("/api/v1/actions/requests/"):
+                request_id = self.path.removeprefix("/api/v1/actions/requests/").removesuffix("/reject").strip("/")
+                self._handle_actions_request_reject(request_id, payload)
+                return
+            if self.path.endswith("/execute") and self.path.startswith("/api/v1/actions/requests/"):
+                request_id = self.path.removeprefix("/api/v1/actions/requests/").removesuffix("/execute").strip("/")
+                self._handle_actions_request_execute(request_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/deployment-plan"):
+                trimmed = self.path.removeprefix("/api/v1/workspaces/")
+                workspace_id, repository_id = trimmed.split("/scm/repositories/", 1)
+                repository_id = repository_id.removesuffix("/deployment-plan").strip("/")
+                self._handle_scm_deployment_plan(workspace_id.strip("/"), repository_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and "/scm/repositories/" in self.path:
+                trimmed = self.path.removeprefix("/api/v1/workspaces/")
+                workspace_id, repository_id = trimmed.split("/scm/repositories/", 1)
+                self._handle_scm_repository_update(workspace_id.strip("/"), repository_id.strip("/"), payload)
+                return
+            if self.path == "/api/v1/ops/chat":
+                self._handle_ops_chat(payload)
+                return
+            if self.path == "/api/v1/workspaces":
+                self._handle_workspaces_create(payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/scm/connections"):
+                workspace_id = self.path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/connections").strip("/")
+                self._handle_scm_connections_create(workspace_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/scm/repositories"):
+                workspace_id = self.path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
+                self._handle_scm_repositories_create(workspace_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and self.path.endswith("/deployment-plan"):
+                trimmed = self.path.removeprefix("/api/v1/workspaces/")
+                workspace_id, repository_id = trimmed.split("/scm/repositories/", 1)
+                repository_id = repository_id.removesuffix("/deployment-plan").strip("/")
+                self._handle_scm_deployment_plan(workspace_id.strip("/"), repository_id, payload)
+                return
+            if self.path.startswith("/api/v1/workspaces/") and "/scm/repositories/" in self.path:
+                trimmed = self.path.removeprefix("/api/v1/workspaces/")
+                workspace_id, repository_id = trimmed.split("/scm/repositories/", 1)
+                self._handle_scm_repository_update(workspace_id.strip("/"), repository_id.strip("/"), payload)
+                return
             if self.path == "/api/repositories/favorites/remove":
                 self._handle_repository_favorites_remove(payload)
                 return
@@ -296,6 +468,115 @@ def _build_handler(
 
         def _handle_repository_favorites(self, query: str) -> None:
             _handle_repository_favorites_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_profiles(self, query: str) -> None:
+            _handle_ocp_profiles_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_actions_requests_list(self, query: str) -> None:
+            _handle_actions_requests_list_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_actions_executions_list(self, query: str) -> None:
+            _handle_actions_executions_list_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_actions_audit_list(self, query: str) -> None:
+            _handle_actions_audit_list_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_scm_oauth_start(self, provider: str, query: str) -> None:
+            _handle_scm_oauth_start_request(
+                self,
+                provider,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_scm_connections_list(self, workspace_id: str) -> None:
+            _handle_scm_connections_list_request(
+                self,
+                workspace_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_scm_repositories_list(self, workspace_id: str) -> None:
+            _handle_scm_repositories_list_request(
+                self,
+                workspace_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_status(self, connection_id: str) -> None:
+            _handle_ocp_status_request(
+                self,
+                connection_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_lease_status(self, query: str) -> None:
+            _handle_ocp_lease_status_request(
+                self,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_overview(self, connection_id: str) -> None:
+            _handle_ocp_overview_request(
+                self,
+                connection_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_metrics(self, connection_id: str, query: str) -> None:
+            _handle_ocp_metrics_request(
+                self,
+                connection_id,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_namespaces(self, connection_id: str) -> None:
+            _handle_ocp_namespaces_request(
+                self,
+                connection_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_resources(self, connection_id: str, query: str) -> None:
+            _handle_ocp_resources_request(
+                self,
+                connection_id,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_ocp_resource_detail(self, connection_id: str, query: str) -> None:
+            _handle_ocp_resource_detail_request(
+                self,
+                connection_id,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_workspaces(self, query: str) -> None:
+            _handle_workspaces_request(
                 self,
                 query,
                 root_dir=root_dir,
@@ -402,6 +683,21 @@ def _build_handler(
             data_control_room_cache.set("payload", None)
         def _handle_repository_favorites_save(self, payload: dict[str, Any]) -> None: _handle_repository_favorites_save_request(self, payload, root_dir=root_dir)
         def _handle_repository_favorites_remove(self, payload: dict[str, Any]) -> None: _handle_repository_favorites_remove_request(self, payload, root_dir=root_dir)
+        def _handle_ocp_connect(self, payload: dict[str, Any]) -> None: _handle_ocp_connect_request(self, payload, root_dir=root_dir)
+        def _handle_actions_preview(self, payload: dict[str, Any]) -> None: _handle_actions_preview_request(self, payload, root_dir=root_dir)
+        def _handle_actions_requests_create(self, payload: dict[str, Any]) -> None: _handle_actions_requests_create_request(self, payload, root_dir=root_dir)
+        def _handle_actions_request_approve(self, request_id: str, payload: dict[str, Any]) -> None: _handle_actions_request_approve_request(self, request_id, payload, root_dir=root_dir)
+        def _handle_actions_request_reject(self, request_id: str, payload: dict[str, Any]) -> None: _handle_actions_request_reject_request(self, request_id, payload, root_dir=root_dir)
+        def _handle_actions_request_execute(self, request_id: str, payload: dict[str, Any]) -> None: _handle_actions_request_execute_request(self, request_id, payload, root_dir=root_dir)
+        def _handle_scm_connections_create(self, workspace_id: str, payload: dict[str, Any]) -> None: _handle_scm_connections_create_request(self, workspace_id, payload, root_dir=root_dir)
+        def _handle_scm_repositories_create(self, workspace_id: str, payload: dict[str, Any]) -> None: _handle_scm_repositories_create_request(self, workspace_id, payload, root_dir=root_dir)
+        def _handle_scm_repository_update(self, workspace_id: str, repository_id: str, payload: dict[str, Any]) -> None: _handle_scm_repository_update_request(self, workspace_id, repository_id, payload, root_dir=root_dir)
+        def _handle_scm_deployment_plan(self, workspace_id: str, repository_id: str, payload: dict[str, Any]) -> None: _handle_scm_deployment_plan_request(self, workspace_id, repository_id, payload, root_dir=root_dir)
+        def _handle_ocp_disconnect(self, payload: dict[str, Any]) -> None: _handle_ocp_disconnect_request(self, payload, root_dir=root_dir)
+        def _handle_ocp_test(self, payload: dict[str, Any]) -> None: _handle_ocp_test_request(self, payload, root_dir=root_dir)
+        def _handle_ocp_lease_refresh(self, payload: dict[str, Any]) -> None: _handle_ocp_lease_refresh_request(self, payload, root_dir=root_dir)
+        def _handle_ops_chat(self, payload: dict[str, Any]) -> None: _handle_ops_chat_request(self, payload, root_dir=root_dir)
+        def _handle_workspaces_create(self, payload: dict[str, Any]) -> None: _handle_workspaces_create_request(self, payload, root_dir=root_dir)
         def _handle_repository_official_materialize(self, payload: dict[str, Any]) -> None:
             result = _handle_repository_official_materialize_request(self, payload, root_dir=root_dir)
             if result is not None:

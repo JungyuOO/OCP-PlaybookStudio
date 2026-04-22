@@ -14,7 +14,7 @@ export default function SharedLandingShell() {
       <SharedLandingSwitcher activeTab={activeTab} />
 
       <div className="shared-shell-body">
-        {activeTab === 'partner' ? <PartnerLanePanel /> : <LandingPage />}
+        {activeTab === 'ops' ? <PartnerLanePanel /> : <LandingPage />}
       </div>
     </div>
   );

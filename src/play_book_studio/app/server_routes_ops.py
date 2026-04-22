@@ -25,6 +25,46 @@ from play_book_studio.app.repository_registry import (
     save_repository_favorites as _save_repository_favorites,
     search_github_repositories as _search_github_repositories,
 )
+from play_book_studio.app.connection_store import (
+    build_dashboard_metrics as _build_ocp_dashboard_metrics,
+    build_lease_status as _build_ocp_lease_status,
+    build_namespaces as _build_ocp_namespaces,
+    build_ops_chat_response as _build_ops_chat_response,
+    build_overview as _build_ocp_overview,
+    build_status_response as _build_ocp_status_response,
+    build_test_result as _build_ocp_test_result,
+    create_profile as _create_ocp_profile,
+    disconnect_profile as _disconnect_ocp_profile,
+    get_resource_detail as _get_ocp_resource_detail,
+    get_profile as _get_ocp_profile,
+    list_resources as _list_ocp_resources,
+    list_profiles as _list_ocp_profiles,
+)
+from play_book_studio.app.action_store import (
+    approve_request as _approve_action_request,
+    create_request as _create_action_request,
+    execute_request as _execute_action_request,
+    list_audit as _list_action_audit,
+    list_executions as _list_action_executions,
+    list_requests as _list_action_requests,
+    preview_action as _preview_action,
+    reject_request as _reject_action_request,
+)
+from play_book_studio.app.scm_store import (
+    build_deployment_plan as _build_scm_deployment_plan,
+    create_connection as _create_scm_connection,
+    create_repository as _create_scm_repository,
+    get_connection as _get_scm_connection,
+    get_repository as _get_scm_repository,
+    list_connections as _list_scm_connections,
+    list_repositories as _list_scm_repositories,
+    update_repository as _update_scm_repository,
+)
+from play_book_studio.app.workspace_store import (
+    create_workspace as _create_workspace,
+    get_workspace as _get_workspace,
+    list_workspaces as _list_workspaces,
+)
 from play_book_studio.app.server_routes_viewer import (
     _viewer_source_meta as _viewer_source_meta_payload,
     resolve_viewer_html as _resolve_viewer_html,
@@ -779,6 +819,349 @@ def handle_repository_favorites(handler: Any, query: str, *, root_dir: Path) -> 
     handler._send_json(_list_repository_favorites(root_dir))
 
 
+def handle_workspaces(handler: Any, query: str, *, root_dir: Path) -> None:
+    del query
+    handler._send_json(_list_workspaces(root_dir))
+
+
+def handle_workspaces_create(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        created = _create_workspace(root_dir, payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(created, HTTPStatus.CREATED)
+
+
+def handle_ocp_profiles(handler: Any, query: str, *, root_dir: Path) -> None:
+    params = parse_qs(query, keep_blank_values=False)
+    workspace_id = str((params.get("workspace_id") or [""])[0]).strip()
+    handler._send_json(_list_ocp_profiles(root_dir, workspace_id=workspace_id))
+
+
+def handle_ocp_connect(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        profile = _create_ocp_profile(root_dir, payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(
+        _build_ocp_status_response(profile, message="Connection profile created."),
+        HTTPStatus.CREATED,
+    )
+
+
+def handle_ocp_status(handler: Any, connection_id: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    handler._send_json(
+        _build_ocp_status_response(
+            profile,
+            message="Connection profile loaded." if profile is not None else "Connection profile not found.",
+        )
+    )
+
+
+def handle_ocp_disconnect(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    connection_id = str(payload.get("connection_id") or "").strip()
+    if not connection_id:
+        handler._send_json({"error": "connection_id is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    removed = _disconnect_ocp_profile(root_dir, connection_id)
+    if removed is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_build_ocp_status_response(None, message=f"Disconnected from {removed.get('cluster_url') or ''}."))
+
+
+def handle_ocp_test(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    connection_id = str(payload.get("connection_id") or "").strip()
+    if not connection_id:
+        handler._send_json({"error": "connection_id is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(
+        _build_ocp_test_result(
+            profile,
+            message="Stored connection profile check completed. Live cluster verification is not wired yet.",
+        )
+    )
+
+
+def handle_ocp_lease_status(handler: Any, query: str, *, root_dir: Path) -> None:
+    del query, root_dir
+    handler._send_json(_build_ocp_lease_status())
+
+
+def handle_ocp_lease_refresh(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    connection_id = str(payload.get("connection_id") or "").strip()
+    if not connection_id:
+        handler._send_json({"error": "connection_id is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(
+        _build_ocp_test_result(
+            profile,
+            message="Lease metadata refreshed from the stored profile. Real lease automation is not wired yet.",
+        )
+    )
+
+
+def handle_ocp_overview(handler: Any, connection_id: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_build_ocp_overview(profile))
+
+
+def handle_ocp_metrics(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    window = str((params.get("window") or ["1h"])[0]).strip() or "1h"
+    step = str((params.get("step") or ["5m"])[0]).strip() or "5m"
+    handler._send_json(_build_ocp_dashboard_metrics(profile, window=window, step=step))
+
+
+def handle_ocp_namespaces(handler: Any, connection_id: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_build_ocp_namespaces(profile))
+
+
+def handle_ocp_resources(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    resource = str((params.get("resource") or ["pods"])[0]).strip() or "pods"
+    namespace = str((params.get("namespace") or [str(profile.get("default_namespace") or "")])[0]).strip()
+    if not namespace:
+        handler._send_json({"error": "namespace is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(_list_ocp_resources(profile, resource=resource, namespace=namespace))
+
+
+def handle_ocp_resource_detail(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    resource = str((params.get("resource") or ["pods"])[0]).strip() or "pods"
+    namespace = str((params.get("namespace") or [str(profile.get("default_namespace") or "")])[0]).strip()
+    name = str((params.get("name") or [""])[0]).strip()
+    if not namespace:
+        handler._send_json({"error": "namespace is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    if not name:
+        handler._send_json({"error": "name is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    try:
+        payload = _get_ocp_resource_detail(profile, resource=resource, namespace=namespace, name=name)
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(payload)
+
+
+def handle_ops_chat(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    connection_id = str(payload.get("connection_id") or "").strip()
+    if not connection_id:
+        handler._send_json({"error": "connection_id is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    profile = _get_ocp_profile(root_dir, connection_id)
+    if profile is None:
+        handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
+        return
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        handler._send_json({"error": "message is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    namespace = str(payload.get("namespace") or "").strip()
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    handler._send_json(
+        _build_ops_chat_response(
+            profile,
+            message=message,
+            namespace=namespace,
+            history=[dict(item) for item in history if isinstance(item, dict)],
+        )
+    )
+
+
+def handle_actions_preview(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    del root_dir
+    try:
+        preview = _preview_action(payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(preview)
+
+
+def handle_actions_requests_create(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        record = _create_action_request(root_dir, payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(record, HTTPStatus.CREATED)
+
+
+def handle_actions_requests_list(handler: Any, query: str, *, root_dir: Path) -> None:
+    params = parse_qs(query, keep_blank_values=False)
+    limit = int(str((params.get("limit") or ["20"])[0]).strip() or "20")
+    handler._send_json(_list_action_requests(root_dir, limit=limit))
+
+
+def handle_actions_request_approve(handler: Any, request_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        record = _approve_action_request(root_dir, request_id, payload)
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(record)
+
+
+def handle_actions_request_reject(handler: Any, request_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        record = _reject_action_request(root_dir, request_id, payload)
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(record)
+
+
+def handle_actions_request_execute(handler: Any, request_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    try:
+        execution = _execute_action_request(root_dir, request_id, payload)
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(execution)
+
+
+def handle_actions_executions_list(handler: Any, query: str, *, root_dir: Path) -> None:
+    params = parse_qs(query, keep_blank_values=False)
+    limit = int(str((params.get("limit") or ["20"])[0]).strip() or "20")
+    handler._send_json(_list_action_executions(root_dir, limit=limit))
+
+
+def handle_actions_audit_list(handler: Any, query: str, *, root_dir: Path) -> None:
+    params = parse_qs(query, keep_blank_values=False)
+    limit = int(str((params.get("limit") or ["20"])[0]).strip() or "20")
+    handler._send_json(_list_action_audit(root_dir, limit=limit))
+
+
+def handle_scm_connections_list(handler: Any, workspace_id: str, *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_list_scm_connections(root_dir, workspace_id))
+
+
+def handle_scm_connections_create(handler: Any, workspace_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    try:
+        record = _create_scm_connection(root_dir, workspace_id, payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(record, HTTPStatus.CREATED)
+
+
+def handle_scm_repositories_list(handler: Any, workspace_id: str, *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_list_scm_repositories(root_dir, workspace_id))
+
+
+def handle_scm_repositories_create(handler: Any, workspace_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    connection_id = str(payload.get("scm_connection_id") or "").strip()
+    connection = _get_scm_connection(root_dir, connection_id)
+    if connection is None or str(connection.get("workspace_id") or "") != workspace_id:
+        handler._send_json({"error": "SCM connection not found."}, HTTPStatus.NOT_FOUND)
+        return
+    try:
+        record = _create_scm_repository(root_dir, workspace_id, payload)
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    handler._send_json(record, HTTPStatus.CREATED)
+
+
+def handle_scm_repository_update(handler: Any, workspace_id: str, repository_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    repository = _get_scm_repository(root_dir, repository_id)
+    if repository is None or str(repository.get("workspace_id") or "") != workspace_id:
+        handler._send_json({"error": "Repository not found."}, HTTPStatus.NOT_FOUND)
+        return
+    try:
+        record = _update_scm_repository(root_dir, repository_id, payload)
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(record)
+
+
+def handle_scm_deployment_plan(handler: Any, workspace_id: str, repository_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    repository = _get_scm_repository(root_dir, repository_id)
+    if repository is None or str(repository.get("workspace_id") or "") != workspace_id:
+        handler._send_json({"error": "Repository not found."}, HTTPStatus.NOT_FOUND)
+        return
+    handler._send_json(_build_scm_deployment_plan(repository, workspace_id, payload))
+
+
+def handle_scm_oauth_start(handler: Any, provider: str, query: str, *, root_dir: Path) -> None:
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider not in {"github", "gitlab"}:
+        handler._send_json({"error": "Unsupported OAuth provider."}, HTTPStatus.BAD_REQUEST)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    workspace_id = str((params.get("workspace_id") or [""])[0]).strip()
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    connection = _create_scm_connection(
+        root_dir,
+        workspace_id,
+        {
+            "provider": normalized_provider,
+            "host_url": "https://gitlab.com" if normalized_provider == "gitlab" else "https://github.com",
+            "account_label": f"{normalized_provider}-oauth",
+        },
+        auth_type_override="oauth",
+    )
+    authorize_url = f"/ops/scm?oauth_status=connected&provider={normalized_provider}&connection_id={connection['scm_connection_id']}"
+    handler._send_json({"provider": normalized_provider, "authorize_url": authorize_url, "state": f"state-{connection['scm_connection_id']}"})
+
+
 def handle_repository_favorites_save(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
     try:
         saved = _save_repository_favorites(root_dir, payload)
@@ -836,6 +1219,14 @@ def handle_wiki_user_overlay_remove(handler: Any, payload: dict[str, Any], *, ro
 
 
 __all__ = [
+    "handle_actions_audit_list",
+    "handle_actions_executions_list",
+    "handle_actions_preview",
+    "handle_actions_request_approve",
+    "handle_actions_request_execute",
+    "handle_actions_request_reject",
+    "handle_actions_requests_create",
+    "handle_actions_requests_list",
     "handle_buyer_packet",
     "handle_data_control_room",
     "handle_debug_chat_log",
@@ -844,12 +1235,34 @@ __all__ = [
     "handle_repository_favorites_remove",
     "handle_repository_favorites_save",
     "handle_repository_official_materialize",
+    "handle_ocp_connect",
+    "handle_ocp_disconnect",
+    "handle_ocp_lease_refresh",
+    "handle_ocp_lease_status",
+    "handle_ocp_metrics",
+    "handle_ocp_namespaces",
+    "handle_ocp_overview",
+    "handle_ocp_resource_detail",
+    "handle_ocp_resources",
+    "handle_ocp_profiles",
+    "handle_ocp_status",
+    "handle_ocp_test",
+    "handle_ops_chat",
     "handle_repository_search",
     "handle_repository_unanswered",
+    "handle_scm_connections_create",
+    "handle_scm_connections_list",
+    "handle_scm_deployment_plan",
+    "handle_scm_oauth_start",
+    "handle_scm_repositories_create",
+    "handle_scm_repositories_list",
+    "handle_scm_repository_update",
     "handle_session_delete",
     "handle_session_load",
     "handle_sessions_delete_all",
     "handle_sessions_list",
+    "handle_workspaces",
+    "handle_workspaces_create",
     "handle_wiki_overlay_signals",
     "handle_wiki_user_overlay_remove",
     "handle_wiki_user_overlay_save",

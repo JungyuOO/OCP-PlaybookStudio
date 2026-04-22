@@ -3,8 +3,15 @@ import WorkspacePage from '../pages/WorkspacePage';
 import LlmWikiBookPage from '../pages/LlmWikiBookPage';
 import PlaybookLibraryPage from '../pages/PlaybookLibraryPage';
 import ProjectDetailsPage from '../pages/ProjectDetailsPage';
-import PartnerNamespacePage from '../partner/PartnerNamespacePage';
-import { PARTNER_ROUTE_DEFINITIONS } from '../partner/partnerLaneConfig';
+import OpsHomePage from '../ops/OpsHomePage';
+import OpsConnectionsPage from '../ops/OpsConnectionsPage';
+import OpsChatPage from '../ops/OpsChatPage';
+import OpsActionsPage from '../ops/OpsActionsPage';
+import OpsScmPage from '../ops/OpsScmPage';
+import OpsOverviewPage from '../ops/OpsOverviewPage';
+import OpsResourcesPage from '../ops/OpsResourcesPage';
+import OpsSurfacePlaceholderPage from '../ops/OpsSurfacePlaceholderPage';
+import OpsWorkspacesPage from '../ops/OpsWorkspacesPage';
 import SharedLandingShell from '../shared/landing/SharedLandingShell';
 import { buildHandoffLocation } from './handoff';
 import { ROUTES } from './routes';
@@ -32,19 +39,29 @@ export default function AppRoutes() {
       <Route path={ROUTES.pbsPlaybookLibrary} element={<PlaybookLibraryPage />} />
       <Route path={ROUTES.pbsControlTower} element={<PlaybookLibraryPage />} />
       <Route path={ROUTES.pbsRepository} element={<PlaybookLibraryPage />} />
-      {PARTNER_ROUTE_DEFINITIONS.map(({ path, eyebrow, title, description }) => (
-        <Route
-          key={path}
-          path={path}
-          element={(
-            <PartnerNamespacePage
-              eyebrow={eyebrow}
-              title={title}
-              description={description}
-            />
-          )}
-        />
-      ))}
+      <Route path={ROUTES.opsHome} element={<OpsHomePage />} />
+      <Route path={ROUTES.opsWorkspaces} element={<OpsWorkspacesPage />} />
+      <Route path={ROUTES.opsConnections} element={<OpsConnectionsPage />} />
+      <Route path={ROUTES.opsOverview} element={<OpsOverviewPage />} />
+      <Route path={ROUTES.opsResources} element={<OpsResourcesPage />} />
+      <Route path={ROUTES.opsChat} element={<OpsChatPage />} />
+      <Route path={ROUTES.opsActions} element={<OpsActionsPage />} />
+      <Route path={ROUTES.opsScm} element={<OpsScmPage />} />
+      <Route
+        path={ROUTES.opsDetails}
+        element={(
+          <OpsSurfacePlaceholderPage
+            eyebrow="OCP Ops Details"
+            title="Integration notes"
+            description="This route keeps the shell boundary explicit while the operational pages are ported one slice at a time."
+            highlights={[
+              'PlayBookStudio owns document retrieval and official-doc chat',
+              'OCP Ops owns workspace, cluster, action, and SCM workflows',
+              'The next frontend slice is the real connections flow',
+            ]}
+          />
+        )}
+      />
       <Route path="*" element={<Navigate replace to={ROUTES.sharedHome} />} />
     </Routes>
   );

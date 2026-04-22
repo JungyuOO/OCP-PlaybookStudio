@@ -5,12 +5,12 @@ describe('buildHandoffLocation', () => {
   it('preserves search and hash during alias handoff', () => {
     expect(
       buildHandoffLocation('/studio', {
-        search: '?tab=partner',
+        search: '?tab=ops',
         hash: '#top',
       }),
     ).toEqual({
       pathname: '/studio',
-      search: '?tab=partner',
+      search: '?tab=ops',
       hash: '#top',
     });
   });

@@ -17,9 +17,9 @@ export default function PartnerNamespacePage({
   return (
     <div className="partner-namespace-page">
       <div className="partner-namespace-shell">
-        <Link to={buildSharedLandingHref('partner')} className="partner-namespace-back">
+        <Link to={buildSharedLandingHref('ops')} className="partner-namespace-back">
           <ArrowLeftRight size={18} />
-          <span>Back to Shared Landing</span>
+          <span>Back to OCP Ops</span>
         </Link>
 
         <section className="partner-namespace-card glass-panel">
@@ -33,15 +33,16 @@ export default function PartnerNamespacePage({
             <SplitSquareVertical size={22} />
             <h3>Namespace isolation</h3>
             <p>
-              이 lane은 partner 기능을 위한 sibling subtree이며, PBS core route family와
-              citation deep link를 덮어쓰지 않습니다.
+              OCP Ops lives in a sibling route family so operational workflows can grow independently
+              from PlayBookStudio document experiences.
             </p>
           </section>
           <section className="glass-panel">
             <ShieldCheck size={22} />
             <h3>Truth isolation</h3>
             <p>
-              shared landing은 entry shell만 공유합니다. runtime truth, corpus, citation map ownership은 PBS에 남습니다.
+              PlayBookStudio owns official-document retrieval and citations. OCP Ops will own cluster
+              context, actions, audit, and operational chat behavior.
             </p>
           </section>
         </div>
