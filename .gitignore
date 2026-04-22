@@ -5,6 +5,7 @@ __pycache__/
 .env.local
 .env.team
 .env.prod
+.omx/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
