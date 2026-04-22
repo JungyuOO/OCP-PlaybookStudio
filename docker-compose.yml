@@ -26,6 +26,29 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  bootstrap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src
+      QDRANT_URL: http://qdrant:6333
+      GRAPH_URI: ${GRAPH_URI:-bolt://host.docker.internal:7687}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - backend_artifacts:/app/artifacts
+    command: ["python", "-m", "play_book_studio.cli", "bootstrap-runtime"]
+    restart: "no"
+
   backend:
     build:
       context: .
@@ -38,8 +61,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       GRAPH_URI: ${GRAPH_URI:-bolt://host.docker.internal:7687}
     depends_on:
-      - qdrant
-      - postgres
+      bootstrap:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
