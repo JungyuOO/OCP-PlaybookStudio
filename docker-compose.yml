@@ -8,30 +8,47 @@ services:
       - "6335:6333"
       - "6336:6334"
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   backend:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
+      target: backend
     env_file:
       - .env
     environment:
       PYTHONPATH: /app/src
       QDRANT_URL: http://qdrant:6333
-      GRAPH_URI: bolt://host.docker.internal:7687
+      GRAPH_URI: ${GRAPH_URI:-bolt://host.docker.internal:7687}
     depends_on:
       - qdrant
+      - postgres
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "8765:8765"
     volumes:
-      - ./src:/app/src
-      - ./artifacts:/app/artifacts
-      - ./data:/app/data
-      - ./manifests:/app/manifests
-      - ./reports:/app/reports
-      - ./tmp:/app/tmp
-      - ./tmp_source:/app/tmp_source
+      - backend_artifacts:/app/artifacts
+      - backend_reports:/app/reports
+      - backend_tmp:/app/tmp
+      - backend_tmp_source:/app/tmp_source
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=5)"]
       interval: 15s
@@ -42,10 +59,9 @@ services:
 
   frontend:
     build:
-      context: ./presentation-ui
+      context: .
       dockerfile: Dockerfile
-    environment:
-      VITE_PROXY_TARGET: http://backend:8765
+      target: frontend
     depends_on:
       backend:
         condition: service_healthy
@@ -61,3 +77,8 @@ services:
 
 volumes:
   qdrant_storage:
+  postgres_storage:
+  backend_artifacts:
+  backend_reports:
+  backend_tmp:
+  backend_tmp_source:
