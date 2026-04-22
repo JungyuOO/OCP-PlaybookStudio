@@ -12,6 +12,7 @@ from pathlib import Path
 
 from play_book_studio.answering.answerer import ChatAnswerer
 from play_book_studio.app.private_lane_smoke import write_private_lane_smoke
+from play_book_studio.app.runtime_bootstrap import bootstrap_runtime_dependencies
 from play_book_studio.app.runtime_maintenance_smoke import write_runtime_maintenance_smoke
 from play_book_studio.app.runtime_report import (
     DEFAULT_PLAYBOOK_UI_BASE_URL,
@@ -125,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rebuild the compact graph fallback artifact from current chunks and playbook documents",
     )
     compact_graph_parser.add_argument("--output", type=Path, default=None)
+
+    bootstrap_runtime_parser = subparsers.add_parser(
+        "bootstrap-runtime",
+        help="Prime runtime dependencies such as Qdrant before serving the app",
+    )
+    bootstrap_runtime_parser.add_argument("--postgres-timeout", type=float, default=60.0)
+    bootstrap_runtime_parser.add_argument("--qdrant-timeout", type=float, default=60.0)
 
     return parser
 
@@ -337,6 +345,18 @@ def _run_graph_compact(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_bootstrap_runtime(args: argparse.Namespace) -> int:
+    settings = load_settings(ROOT)
+    report = bootstrap_runtime_dependencies(
+        settings,
+        root_dir=ROOT,
+        postgres_timeout_seconds=args.postgres_timeout,
+        qdrant_timeout_seconds=args.qdrant_timeout,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main() -> int:
     args = build_parser().parse_args()
     if args.command == "ui":
@@ -355,6 +375,8 @@ def main() -> int:
         return _run_private_lane_smoke(args)
     if args.command == "graph-compact":
         return _run_graph_compact(args)
+    if args.command == "bootstrap-runtime":
+        return _run_bootstrap_runtime(args)
     raise ValueError(f"unsupported command: {args.command}")
 
 
