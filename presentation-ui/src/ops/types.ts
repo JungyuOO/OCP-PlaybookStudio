@@ -260,4 +260,5 @@ export type OpsScmConfigPathCandidate = {
   path: string;
   manifestKind: string;
   score: number;
+  confidence: 'recommended' | 'fallback';
 };

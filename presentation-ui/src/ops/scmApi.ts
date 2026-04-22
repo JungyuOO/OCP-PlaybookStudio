@@ -74,6 +74,7 @@ type ApiScmConfigPathCandidate = {
   path: string;
   manifest_kind: string;
   score: number;
+  confidence: 'recommended' | 'fallback';
 };
 
 function apiUrl(path: string) {
@@ -165,6 +166,7 @@ function mapConfigPathCandidate(input: ApiScmConfigPathCandidate): OpsScmConfigP
     path: input.path,
     manifestKind: input.manifest_kind,
     score: input.score,
+    confidence: input.confidence,
   };
 }
 

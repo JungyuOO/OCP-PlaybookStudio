@@ -340,6 +340,19 @@
   gap: 10px;
 }
 
+.ops-discovery-group {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.ops-discovery-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .ops-chip-row {
   display: flex;
   flex-wrap: wrap;

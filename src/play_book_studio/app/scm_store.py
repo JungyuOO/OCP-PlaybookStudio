@@ -381,6 +381,34 @@ def _candidate_manifest_kind(path: str) -> str:
     return "config_yaml"
 
 
+def _is_config_candidate(path: str) -> bool:
+    normalized = str(path or "").strip().lower()
+    if not normalized:
+        return False
+    filename = Path(normalized).name
+    if filename in {"config.yaml", "config.yml", "values.yaml", "values.yml", "kustomization.yaml", "kustomization.yml"}:
+        return True
+    if filename.endswith(("-values.yaml", "-values.yml")):
+        return True
+    if "/deploy/" in normalized or "/deployment/" in normalized or "/helm/" in normalized or "/charts/" in normalized or "/kustomize/" in normalized or "/overlays/" in normalized:
+        return filename.endswith((".yaml", ".yml"))
+    return False
+
+
+def _is_fallback_config_candidate(path: str) -> bool:
+    normalized = str(path or "").strip().lower()
+    if not normalized:
+        return False
+    filename = Path(normalized).name
+    if filename in {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}:
+        return True
+    if normalized.startswith("manifests/") and filename.endswith((".yaml", ".yml")):
+        return True
+    if normalized.startswith("deploy/") and filename.endswith((".yaml", ".yml")):
+        return True
+    return False
+
+
 def _candidate_score(path: str) -> int:
     normalized = str(path or "").strip().lower()
     score = 0
@@ -398,6 +426,10 @@ def _candidate_score(path: str) -> int:
         score += 20
     if "/kustomize/" in normalized or "/overlays/" in normalized:
         score += 20
+    if normalized.endswith("docker-compose.yml") or normalized.endswith("docker-compose.yaml"):
+        score += 35
+    if normalized.startswith("manifests/"):
+        score += 30
     if normalized.count("/") < 4:
         score += 10
     return score
@@ -431,22 +463,34 @@ def discover_config_paths(
         tree_response.raise_for_status()
         payload = tree_response.json() if tree_response.content else {}
         entries = payload.get("tree") if isinstance(payload, dict) else []
+        fallback_candidates: list[dict[str, Any]] = []
         for entry in entries if isinstance(entries, list) else []:
             if not isinstance(entry, dict) or str(entry.get("type") or "") != "blob":
                 continue
             path = str(entry.get("path") or "").strip()
             if not path:
                 continue
-            manifest_kind = _candidate_manifest_kind(path)
-            if manifest_kind == "config_yaml" and not path.lower().endswith((".yaml", ".yml")):
+            if not _is_config_candidate(path):
+                if _is_fallback_config_candidate(path):
+                    fallback_candidates.append(
+                        {
+                            "path": path,
+                            "manifest_kind": _candidate_manifest_kind(path),
+                            "score": _candidate_score(path),
+                            "confidence": "fallback",
+                        }
+                    )
                 continue
+            manifest_kind = _candidate_manifest_kind(path)
             candidates.append(
                 {
                     "path": path,
                     "manifest_kind": manifest_kind,
                     "score": _candidate_score(path),
+                    "confidence": "recommended",
                 }
             )
+        candidates.extend(fallback_candidates)
     elif provider == "gitlab":
         base = str(connection.get("host_url") or "").rstrip("/")
         project_id = requests.utils.quote(repo_full_name, safe="")
@@ -458,26 +502,44 @@ def discover_config_paths(
         )
         tree_response.raise_for_status()
         entries = tree_response.json() if tree_response.content else []
+        fallback_candidates = []
         for entry in entries if isinstance(entries, list) else []:
             if not isinstance(entry, dict) or str(entry.get("type") or "") != "blob":
                 continue
             path = str(entry.get("path") or "").strip()
             if not path:
                 continue
-            manifest_kind = _candidate_manifest_kind(path)
-            if manifest_kind == "config_yaml" and not path.lower().endswith((".yaml", ".yml")):
+            if not _is_config_candidate(path):
+                if _is_fallback_config_candidate(path):
+                    fallback_candidates.append(
+                        {
+                            "path": path,
+                            "manifest_kind": _candidate_manifest_kind(path),
+                            "score": _candidate_score(path),
+                            "confidence": "fallback",
+                        }
+                    )
                 continue
+            manifest_kind = _candidate_manifest_kind(path)
             candidates.append(
                 {
                     "path": path,
                     "manifest_kind": manifest_kind,
                     "score": _candidate_score(path),
+                    "confidence": "recommended",
                 }
             )
+        candidates.extend(fallback_candidates)
     else:
         raise ValueError("Real config-path discovery is currently supported for GitHub.com and GitLab OAuth connections.")
 
-    candidates.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("path") or "")))
+    candidates.sort(
+        key=lambda item: (
+            0 if str(item.get("confidence") or "") == "recommended" else 1,
+            -int(item.get("score") or 0),
+            str(item.get("path") or ""),
+        )
+    )
     return {
         "items": candidates[:max_items],
     }

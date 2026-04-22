@@ -14,6 +14,7 @@ import {
 } from './scmApi';
 import { OpsShell } from './OpsShell';
 import type {
+  OpsScmConfigPathCandidate,
   OpsScmConnectionRecord,
   OpsScmDeploymentPlan,
   OpsScmDiscoveredRepository,
@@ -39,7 +40,7 @@ export default function OpsScmPage() {
   const [targetNamespace, setTargetNamespace] = useState('default');
   const [repoQuery, setRepoQuery] = useState('');
   const [discoveredRepositories, setDiscoveredRepositories] = useState<OpsScmDiscoveredRepository[]>([]);
-  const [configCandidates, setConfigCandidates] = useState<Array<{ path: string; manifestKind: string; score: number }>>([]);
+  const [configCandidates, setConfigCandidates] = useState<OpsScmConfigPathCandidate[]>([]);
   const [plan, setPlan] = useState<OpsScmDeploymentPlan | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -228,6 +229,9 @@ export default function OpsScmPage() {
     }
   }
 
+  const recommendedConfigCandidates = configCandidates.filter((item) => item.confidence === 'recommended');
+  const fallbackConfigCandidates = configCandidates.filter((item) => item.confidence === 'fallback');
+
   return (
     <OpsShell
       eyebrow="OCP Ops SCM"
@@ -321,6 +325,7 @@ export default function OpsScmPage() {
               </button>
             </div>
           </div>
+
           <div className="ops-stack">
             {discoveredRepositories.map((item) => (
               <button
@@ -338,23 +343,68 @@ export default function OpsScmPage() {
                 </div>
               </button>
             ))}
-            {configCandidates.map((item) => (
-              <button
-                key={`${item.path}:${item.manifestKind}`}
-                type="button"
-                className="ops-list-item"
-                onClick={() => {
-                  setConfigPath(item.path);
-                  setManifestKind(item.manifestKind);
-                }}
-              >
-                <div className="ops-list-main">
-                  <strong>{item.path}</strong>
-                  <span>{item.manifestKind} · score {item.score}</span>
-                </div>
-              </button>
-            ))}
           </div>
+
+          {recommendedConfigCandidates.length > 0 ? (
+            <div className="ops-discovery-group">
+              <div className="ops-discovery-head">
+                <span className="ops-section-eyebrow">Recommended matches</span>
+                <span className="ops-meta-chip">{recommendedConfigCandidates.length}</span>
+              </div>
+              <div className="ops-stack">
+                {recommendedConfigCandidates.map((item) => (
+                  <button
+                    key={`${item.path}:${item.manifestKind}`}
+                    type="button"
+                    className="ops-list-item"
+                    onClick={() => {
+                      setConfigPath(item.path);
+                      setManifestKind(item.manifestKind);
+                    }}
+                  >
+                    <div className="ops-list-main">
+                      <strong>{item.path}</strong>
+                      <span>{item.manifestKind} · score {item.score}</span>
+                    </div>
+                    <div className="ops-list-meta">
+                      <span className="ops-badge">Recommended</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {fallbackConfigCandidates.length > 0 ? (
+            <div className="ops-discovery-group">
+              <div className="ops-discovery-head">
+                <span className="ops-section-eyebrow">Fallback matches</span>
+                <span className="ops-meta-chip">{fallbackConfigCandidates.length}</span>
+              </div>
+              <div className="ops-stack">
+                {fallbackConfigCandidates.map((item) => (
+                  <button
+                    key={`${item.path}:${item.manifestKind}`}
+                    type="button"
+                    className="ops-list-item"
+                    onClick={() => {
+                      setConfigPath(item.path);
+                      setManifestKind(item.manifestKind);
+                    }}
+                  >
+                    <div className="ops-list-main">
+                      <strong>{item.path}</strong>
+                      <span>{item.manifestKind} · score {item.score}</span>
+                    </div>
+                    <div className="ops-list-meta">
+                      <span className="ops-badge">Weak match</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
           <form className="ops-form" onSubmit={handleCreateRepository}>
             <label className="ops-field">
               <span>SCM connection</span>
