@@ -5,13 +5,21 @@ import {
   buildScmDeploymentPlan,
   createScmConnection,
   createScmRepository,
+  discoverScmRepositories,
   listScmConnections,
   listScmRepositories,
   startScmOauth,
   updateScmRepository,
 } from './scmApi';
 import { OpsShell } from './OpsShell';
-import type { OpsScmConnectionRecord, OpsScmDeploymentPlan, OpsScmProvider, OpsScmRepositoryRecord, OpsWorkspaceRecord } from './types';
+import type {
+  OpsScmConnectionRecord,
+  OpsScmDeploymentPlan,
+  OpsScmDiscoveredRepository,
+  OpsScmProvider,
+  OpsScmRepositoryRecord,
+  OpsWorkspaceRecord,
+} from './types';
 
 export default function OpsScmPage() {
   const [workspaces, setWorkspaces] = useState<OpsWorkspaceRecord[]>([]);
@@ -28,6 +36,8 @@ export default function OpsScmPage() {
   const [manifestKind, setManifestKind] = useState('config_yaml');
   const [targetClusterUrl, setTargetClusterUrl] = useState('');
   const [targetNamespace, setTargetNamespace] = useState('default');
+  const [repoQuery, setRepoQuery] = useState('');
+  const [discoveredRepositories, setDiscoveredRepositories] = useState<OpsScmDiscoveredRepository[]>([]);
   const [plan, setPlan] = useState<OpsScmDeploymentPlan | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -84,6 +94,7 @@ export default function OpsScmPage() {
     const search = new URLSearchParams(window.location.search);
     const oauthStatus = search.get('oauth_status')?.trim() ?? '';
     const providerValue = search.get('provider')?.trim() ?? '';
+    const oauthMessage = search.get('message')?.trim() ?? '';
     if (!oauthStatus) return;
     if (oauthStatus === 'connected') {
       setMessage(providerValue ? `${providerValue} account connected.` : 'SCM account connected.');
@@ -91,6 +102,9 @@ export default function OpsScmPage() {
       if (selectedWorkspaceId) {
         void refresh(selectedWorkspaceId);
       }
+    } else {
+      setError(oauthMessage || 'SCM OAuth failed.');
+      setMessage('');
     }
     window.history.replaceState(null, '', '/ops/scm');
   }, [selectedWorkspaceId]);
@@ -137,6 +151,21 @@ export default function OpsScmPage() {
       await refresh(selectedWorkspaceId);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'Failed to create repository.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDiscoverRepositories() {
+    if (!selectedWorkspaceId || !connectionId) return;
+    setLoading(true);
+    setError('');
+    try {
+      const items = await discoverScmRepositories(selectedWorkspaceId, connectionId, repoQuery, 20);
+      setDiscoveredRepositories(items);
+      setMessage(items.length > 0 ? `Fetched ${items.length} repositories from provider.` : 'No repositories matched the current query.');
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to fetch repositories.');
     } finally {
       setLoading(false);
     }
@@ -192,6 +221,13 @@ export default function OpsScmPage() {
       {message ? <div className="ops-detail-card glass-panel">{message}</div> : null}
       <div className="ops-detail-card glass-panel">
         Live note: GitHub repository validation uses the local GitHub token from the environment when available. GitLab remains synthetic in this stage unless a real provider path is added next.
+      </div>
+      <div className="ops-detail-card glass-panel">
+        OAuth config keys:
+        <br />
+        GitHub: <code>SCM_GITHUB_CLIENT_ID</code>, <code>SCM_GITHUB_CLIENT_SECRET</code>
+        <br />
+        GitLab: <code>SCM_GITLAB_CLIENT_ID</code>, <code>SCM_GITLAB_CLIENT_SECRET</code>
       </div>
 
       <div className="ops-two-column">
@@ -253,6 +289,33 @@ export default function OpsScmPage() {
               <span className="ops-section-eyebrow">Repository profile</span>
               <h2>Register delivery repository</h2>
             </div>
+          </div>
+          <div className="ops-form">
+            <label className="ops-field">
+              <span>Discover repositories from selected connection</span>
+              <input value={repoQuery} onChange={(event) => setRepoQuery(event.target.value)} placeholder="search repositories" />
+            </label>
+            <button type="button" className="ops-secondary-action" disabled={loading || !selectedWorkspaceId || !connectionId} onClick={() => void handleDiscoverRepositories()}>
+              Fetch repositories
+            </button>
+          </div>
+          <div className="ops-stack">
+            {discoveredRepositories.map((item) => (
+              <button
+                key={`${item.provider}:${item.externalId}`}
+                type="button"
+                className="ops-list-item"
+                onClick={() => {
+                  setRepoFullName(item.fullName);
+                  setConfigPath('config.yaml');
+                }}
+              >
+                <div className="ops-list-main">
+                  <strong>{item.fullName}</strong>
+                  <span>{item.defaultBranch} · {item.visibility}</span>
+                </div>
+              </button>
+            ))}
           </div>
           <form className="ops-form" onSubmit={handleCreateRepository}>
             <label className="ops-field">

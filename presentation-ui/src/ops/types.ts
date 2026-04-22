@@ -245,3 +245,13 @@ export type OpsScmDeploymentPlan = {
   requiresPullRequest: boolean;
   nextStep: string;
 };
+
+export type OpsScmDiscoveredRepository = {
+  provider: string;
+  externalId: string;
+  fullName: string;
+  name: string;
+  defaultBranch: string;
+  webUrl: string;
+  visibility: string;
+};

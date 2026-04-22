@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -14,17 +15,41 @@ _PROVIDERS = {"github", "gitlab"}
 _DELIVERY_MODES = {"gitops_commit", "cicd_pipeline"}
 _MANIFEST_KINDS = {"config_yaml", "helm_values", "kustomize"}
 _GITHUB_TOKEN_ENV_KEYS = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_CLASSIC_TOKEN", "GITHUB_PAT")
+_SCM_GITHUB_CLIENT_ID = "SCM_GITHUB_CLIENT_ID"
+_SCM_GITHUB_CLIENT_SECRET = "SCM_GITHUB_CLIENT_SECRET"
+_SCM_GITHUB_SCOPE = "SCM_GITHUB_SCOPE"
+_SCM_GITHUB_AUTHORIZE_URL = "SCM_GITHUB_AUTHORIZE_URL"
+_SCM_GITHUB_TOKEN_URL = "SCM_GITHUB_TOKEN_URL"
+_SCM_GITHUB_USER_URL = "SCM_GITHUB_USER_URL"
+_SCM_GITLAB_CLIENT_ID = "SCM_GITLAB_CLIENT_ID"
+_SCM_GITLAB_CLIENT_SECRET = "SCM_GITLAB_CLIENT_SECRET"
+_SCM_GITLAB_SCOPE = "SCM_GITLAB_SCOPE"
+_SCM_GITLAB_AUTHORIZE_URL = "SCM_GITLAB_AUTHORIZE_URL"
+_SCM_GITLAB_TOKEN_URL = "SCM_GITLAB_TOKEN_URL"
+_SCM_GITLAB_USER_URL = "SCM_GITLAB_USER_URL"
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _document_path(root_dir: Path) -> Path:
+def _ops_dir(root_dir: Path) -> Path:
     settings = load_settings(root_dir)
     target_dir = settings.artifacts_dir / "ops"
     target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir / "scm.json"
+    return target_dir
+
+
+def _document_path(root_dir: Path) -> Path:
+    return _ops_dir(root_dir) / "scm.json"
+
+
+def _secrets_path(root_dir: Path) -> Path:
+    return _ops_dir(root_dir) / "scm-secrets.json"
+
+
+def _oauth_state_path(root_dir: Path) -> Path:
+    return _ops_dir(root_dir) / "scm-oauth-state.json"
 
 
 def _read_document(root_dir: Path) -> dict[str, Any]:
@@ -45,6 +70,124 @@ def _read_document(root_dir: Path) -> dict[str, Any]:
 
 def _write_document(root_dir: Path, payload: dict[str, Any]) -> None:
     _document_path(root_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _read_secrets(root_dir: Path) -> dict[str, dict[str, str]]:
+    path = _secrets_path(root_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): {str(inner_key): str(inner_value) for inner_key, inner_value in value.items()}
+        for key, value in payload.items()
+        if isinstance(value, dict)
+    }
+
+
+def _write_secrets(root_dir: Path, payload: dict[str, dict[str, str]]) -> None:
+    _secrets_path(root_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _store_secret(root_dir: Path, payload: dict[str, str]) -> str:
+    secret_ref = f"ops://scm/secret/{uuid.uuid4().hex}"
+    document = _read_secrets(root_dir)
+    document[secret_ref] = payload
+    _write_secrets(root_dir, document)
+    return secret_ref
+
+
+def _load_secret(root_dir: Path, secret_ref: str) -> dict[str, str]:
+    return _read_secrets(root_dir).get(secret_ref, {})
+
+
+def _read_oauth_state(root_dir: Path) -> dict[str, dict[str, str]]:
+    path = _oauth_state_path(root_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): {str(inner_key): str(inner_value) for inner_key, inner_value in value.items()}
+        for key, value in payload.items()
+        if isinstance(value, dict)
+    }
+
+
+def _write_oauth_state(root_dir: Path, payload: dict[str, dict[str, str]]) -> None:
+    _oauth_state_path(root_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _create_oauth_state(root_dir: Path, *, workspace_id: str, provider: str) -> str:
+    state = f"scm-oauth-{uuid.uuid4().hex}"
+    document = _read_oauth_state(root_dir)
+    document[state] = {
+        "workspace_id": workspace_id,
+        "provider": provider,
+        "created_at": _now_iso(),
+    }
+    _write_oauth_state(root_dir, document)
+    return state
+
+
+def _pop_oauth_state(root_dir: Path, state: str) -> dict[str, str] | None:
+    document = _read_oauth_state(root_dir)
+    payload = document.pop(state, None)
+    _write_oauth_state(root_dir, document)
+    return payload
+
+
+def _oauth_provider_config(root_dir: Path, provider: str) -> dict[str, str]:
+    env = load_effective_env(root_dir)
+    if provider == "github":
+        return {
+            "client_id": str(env.get(_SCM_GITHUB_CLIENT_ID) or "").strip(),
+            "client_secret": str(env.get(_SCM_GITHUB_CLIENT_SECRET) or "").strip(),
+            "scope": str(env.get(_SCM_GITHUB_SCOPE) or "read:user repo").strip(),
+            "authorize_url": str(env.get(_SCM_GITHUB_AUTHORIZE_URL) or "https://github.com/login/oauth/authorize").strip(),
+            "token_url": str(env.get(_SCM_GITHUB_TOKEN_URL) or "https://github.com/login/oauth/access_token").strip(),
+            "user_url": str(env.get(_SCM_GITHUB_USER_URL) or "https://api.github.com/user").strip(),
+            "host_url": "https://github.com",
+        }
+    return {
+        "client_id": str(env.get(_SCM_GITLAB_CLIENT_ID) or "").strip(),
+        "client_secret": str(env.get(_SCM_GITLAB_CLIENT_SECRET) or "").strip(),
+        "scope": str(env.get(_SCM_GITLAB_SCOPE) or "read_user api").strip(),
+        "authorize_url": str(env.get(_SCM_GITLAB_AUTHORIZE_URL) or "https://gitlab.com/oauth/authorize").strip(),
+        "token_url": str(env.get(_SCM_GITLAB_TOKEN_URL) or "https://gitlab.com/oauth/token").strip(),
+        "user_url": str(env.get(_SCM_GITLAB_USER_URL) or "https://gitlab.com/api/v4/user").strip(),
+        "host_url": "https://gitlab.com",
+    }
+
+
+def oauth_is_configured(root_dir: Path, provider: str) -> bool:
+    config = _oauth_provider_config(root_dir, provider)
+    return bool(config["client_id"] and config["client_secret"])
+
+
+def build_oauth_authorize_url(root_dir: Path, *, provider: str, workspace_id: str, callback_url: str) -> tuple[str, str]:
+    config = _oauth_provider_config(root_dir, provider)
+    if not config["client_id"] or not config["client_secret"]:
+        raise ValueError(f"{provider} OAuth is not configured.")
+    state = _create_oauth_state(root_dir, workspace_id=workspace_id, provider=provider)
+    query = urlencode(
+        {
+            "client_id": config["client_id"],
+            "redirect_uri": callback_url,
+            "response_type": "code",
+            "scope": config["scope"],
+            "state": state,
+        }
+    )
+    return f"{config['authorize_url']}?{query}", state
 
 
 def _github_token(root_dir: Path) -> str:
@@ -68,10 +211,46 @@ def _github_headers(root_dir: Path) -> dict[str, str]:
     return headers
 
 
+def _github_headers_for_connection(root_dir: Path, connection: dict[str, Any]) -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "OCP-PlaybookStudio/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    secret = _load_secret(root_dir, str(connection.get("secret_ref") or ""))
+    token = str(secret.get("access_token") or "").strip() or _github_token(root_dir)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _gitlab_headers_for_connection(root_dir: Path, connection: dict[str, Any]) -> dict[str, str]:
+    secret = _load_secret(root_dir, str(connection.get("secret_ref") or ""))
+    token = str(secret.get("access_token") or secret.get("token") or "").strip()
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "OCP-PlaybookStudio/1.0",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _fetch_github_repo(root_dir: Path, repo_full_name: str) -> dict[str, Any]:
     response = requests.get(
         f"https://api.github.com/repos/{repo_full_name}",
         headers=_github_headers(root_dir),
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _fetch_github_repo_for_connection(root_dir: Path, connection: dict[str, Any], repo_full_name: str) -> dict[str, Any]:
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}",
+        headers=_github_headers_for_connection(root_dir, connection),
         timeout=15,
     )
     response.raise_for_status()
@@ -93,6 +272,104 @@ def _github_content_exists(root_dir: Path, repo_full_name: str, ref: str, path: 
         return False
     response.raise_for_status()
     return True
+
+
+def _github_content_exists_for_connection(root_dir: Path, connection: dict[str, Any], repo_full_name: str, ref: str, path: str) -> bool:
+    target_path = str(path or "").strip().strip("/")
+    if not target_path:
+        return False
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/contents/{target_path}",
+        headers=_github_headers_for_connection(root_dir, connection),
+        params={"ref": ref},
+        timeout=15,
+    )
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
+
+
+def discover_repositories(
+    root_dir: Path,
+    *,
+    workspace_id: str,
+    connection_id: str,
+    query: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    connection = get_connection(root_dir, connection_id)
+    if connection is None or str(connection.get("workspace_id") or "") != workspace_id:
+        raise LookupError("SCM connection not found.")
+
+    provider = str(connection.get("provider") or "").strip().lower()
+    normalized_query = str(query or "").strip().lower()
+    max_items = max(1, min(limit, 100))
+
+    if provider == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
+        response = requests.get(
+            "https://api.github.com/user/repos",
+            headers=_github_headers_for_connection(root_dir, connection),
+            params={"per_page": max_items, "sort": "updated", "affiliation": "owner,collaborator,organization_member"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json() if response.content else []
+        repos = payload if isinstance(payload, list) else []
+        items = []
+        for repo in repos:
+            if not isinstance(repo, dict):
+                continue
+            full_name = str(repo.get("full_name") or "").strip()
+            if not full_name:
+                continue
+            if normalized_query and normalized_query not in full_name.lower() and normalized_query not in str(repo.get("name") or "").lower():
+                continue
+            items.append(
+                {
+                    "provider": "github",
+                    "external_id": str(repo.get("id") or ""),
+                    "full_name": full_name,
+                    "name": str(repo.get("name") or ""),
+                    "default_branch": str(repo.get("default_branch") or "main"),
+                    "web_url": str(repo.get("html_url") or ""),
+                    "visibility": "private" if bool(repo.get("private")) else "public",
+                }
+            )
+        return {"items": items[:max_items]}
+
+    if provider == "gitlab":
+        base = str(connection.get("host_url") or "").rstrip("/")
+        response = requests.get(
+            f"{base}/api/v4/projects",
+            headers=_gitlab_headers_for_connection(root_dir, connection),
+            params={"membership": "true", "simple": "true", "per_page": max_items, "search": query},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json() if response.content else []
+        repos = payload if isinstance(payload, list) else []
+        items = []
+        for repo in repos:
+            if not isinstance(repo, dict):
+                continue
+            full_name = str(repo.get("path_with_namespace") or "").strip()
+            if not full_name:
+                continue
+            items.append(
+                {
+                    "provider": "gitlab",
+                    "external_id": str(repo.get("id") or ""),
+                    "full_name": full_name,
+                    "name": str(repo.get("name") or ""),
+                    "default_branch": str(repo.get("default_branch") or "main"),
+                    "web_url": str(repo.get("web_url") or ""),
+                    "visibility": str(repo.get("visibility") or ""),
+                }
+            )
+        return {"items": items[:max_items]}
+
+    raise ValueError("Real repository discovery is currently supported for GitHub.com and GitLab OAuth connections.")
 
 
 def list_connections(root_dir: Path, workspace_id: str) -> dict[str, Any]:
@@ -119,6 +396,79 @@ def create_connection(root_dir: Path, workspace_id: str, payload: dict[str, Any]
         "login_name": account_label.replace(" ", "-").lower(),
         "scopes": ["repo", "read:org"] if provider == "github" else ["api", "read_repository"],
         "secret_ref": f"ops://scm/{provider}/{uuid.uuid4().hex}",
+        "status": "connected",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }
+    document = _read_document(root_dir)
+    document["connections"].insert(0, item)
+    document["updated_at"] = timestamp
+    _write_document(root_dir, document)
+    return item
+
+
+def complete_oauth_callback(root_dir: Path, *, provider: str, code: str, state: str, callback_url: str) -> dict[str, Any]:
+    pending = _pop_oauth_state(root_dir, state)
+    if pending is None or str(pending.get("provider") or "") != provider:
+        raise ValueError("OAuth state is invalid or expired.")
+
+    config = _oauth_provider_config(root_dir, provider)
+    if not config["client_id"] or not config["client_secret"]:
+        raise ValueError(f"{provider} OAuth is not configured.")
+
+    token_response = requests.post(
+        config["token_url"],
+        headers={"Accept": "application/json"},
+        data={
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
+            "code": code,
+            "redirect_uri": callback_url,
+            "grant_type": "authorization_code",
+        },
+        timeout=15,
+    )
+    token_response.raise_for_status()
+    token_payload = token_response.json() if token_response.content else {}
+    access_token = str(token_payload.get("access_token") or "").strip()
+    if not access_token:
+        raise ValueError("OAuth token exchange did not return an access token.")
+
+    user_response = requests.get(
+        config["user_url"],
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+        },
+        timeout=15,
+    )
+    user_response.raise_for_status()
+    user_payload = user_response.json() if user_response.content else {}
+    login_name = str(user_payload.get("login") or user_payload.get("username") or "").strip()
+    account_label = str(user_payload.get("name") or login_name or f"{provider} account").strip()
+    scopes = [scope for scope in str(token_payload.get("scope") or config["scope"]).replace(",", " ").split() if scope]
+    secret_ref = _store_secret(
+        root_dir,
+        {
+          "provider": provider,
+          "access_token": access_token,
+          "refresh_token": str(token_payload.get("refresh_token") or "").strip(),
+          "token_type": str(token_payload.get("token_type") or "Bearer").strip(),
+          "scope": str(token_payload.get("scope") or config["scope"]).strip(),
+        },
+    )
+
+    timestamp = _now_iso()
+    item = {
+        "scm_connection_id": f"scm-{uuid.uuid4().hex}",
+        "workspace_id": str(pending.get("workspace_id") or "").strip(),
+        "provider": provider,
+        "host_url": config["host_url"],
+        "auth_type": "oauth",
+        "account_label": account_label,
+        "login_name": login_name,
+        "scopes": scopes,
+        "secret_ref": secret_ref,
         "status": "connected",
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -164,9 +514,9 @@ def create_repository(root_dir: Path, workspace_id: str, payload: dict[str, Any]
     config_path = str(payload.get("config_path") or "config.yaml").strip() or "config.yaml"
     sync_status = "connected"
     if str(connection.get("provider") or "") == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
-        repo_payload = _fetch_github_repo(root_dir, repo_full_name)
+        repo_payload = _fetch_github_repo_for_connection(root_dir, connection, repo_full_name)
         default_branch = str(repo_payload.get("default_branch") or default_branch).strip() or default_branch
-        sync_status = "config_found" if _github_content_exists(root_dir, repo_full_name, default_branch, config_path) else "config_missing"
+        sync_status = "config_found" if _github_content_exists_for_connection(root_dir, connection, repo_full_name, default_branch, config_path) else "config_missing"
     timestamp = _now_iso()
     item = {
         "repository_id": f"repo-{uuid.uuid4().hex}",
@@ -219,11 +569,11 @@ def update_repository(root_dir: Path, repository_id: str, payload: dict[str, Any
             item["auto_deploy_enabled"] = bool(payload["auto_deploy_enabled"])
         connection = get_connection(root_dir, str(item.get("scm_connection_id") or ""))
         if connection and str(connection.get("provider") or "") == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
-            repo_payload = _fetch_github_repo(root_dir, str(item.get("repo_full_name") or ""))
+            repo_payload = _fetch_github_repo_for_connection(root_dir, connection, str(item.get("repo_full_name") or ""))
             item["default_branch"] = str(repo_payload.get("default_branch") or item.get("default_branch") or "main").strip() or "main"
             item["sync_status"] = (
                 "config_found"
-                if _github_content_exists(root_dir, str(item.get("repo_full_name") or ""), str(item.get("default_branch") or "main"), str(item.get("config_path") or ""))
+                if _github_content_exists_for_connection(root_dir, connection, str(item.get("repo_full_name") or ""), str(item.get("default_branch") or "main"), str(item.get("config_path") or ""))
                 else "config_missing"
             )
         item["updated_at"] = _now_iso()
@@ -274,12 +624,16 @@ def build_deployment_plan(repository: dict[str, Any], workspace_id: str, payload
 
 
 __all__ = [
+    "build_oauth_authorize_url",
     "build_deployment_plan",
+    "complete_oauth_callback",
     "create_connection",
     "create_repository",
+    "discover_repositories",
     "get_connection",
     "get_repository",
     "list_connections",
     "list_repositories",
+    "oauth_is_configured",
     "update_repository",
 ]

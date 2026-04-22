@@ -53,13 +53,17 @@ from play_book_studio.app.action_store import (
     reject_request as _reject_action_request,
 )
 from play_book_studio.app.scm_store import (
+    build_oauth_authorize_url as _build_scm_oauth_authorize_url,
     build_deployment_plan as _build_scm_deployment_plan,
+    complete_oauth_callback as _complete_scm_oauth_callback,
     create_connection as _create_scm_connection,
     create_repository as _create_scm_repository,
+    discover_repositories as _discover_scm_repositories,
     get_connection as _get_scm_connection,
     get_repository as _get_scm_repository,
     list_connections as _list_scm_connections,
     list_repositories as _list_scm_repositories,
+    oauth_is_configured as _scm_oauth_is_configured,
     update_repository as _update_scm_repository,
 )
 from play_book_studio.app.workspace_store import (
@@ -1111,6 +1115,33 @@ def handle_scm_connections_list(handler: Any, workspace_id: str, *, root_dir: Pa
     handler._send_json(_list_scm_connections(root_dir, workspace_id))
 
 
+def handle_scm_connection_repositories_discover(handler: Any, workspace_id: str, connection_id: str, query: str, *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    search_query = str((params.get("query") or [""])[0]).strip()
+    limit = int(str((params.get("limit") or ["20"])[0]).strip() or "20")
+    try:
+        payload = _discover_scm_repositories(
+            root_dir,
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            query=search_query,
+            limit=limit,
+        )
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except requests.HTTPError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+        return
+    handler._send_json(payload)
+
+
 def handle_scm_connections_create(handler: Any, workspace_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
     if _get_workspace(root_dir, workspace_id) is None:
         handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
@@ -1193,6 +1224,16 @@ def handle_scm_oauth_start(handler: Any, provider: str, query: str, *, root_dir:
     if _get_workspace(root_dir, workspace_id) is None:
         handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
         return
+    if _scm_oauth_is_configured(root_dir, normalized_provider):
+        callback_url = f"http://{handler.headers.get('Host', '127.0.0.1')}/api/v1/oauth/{normalized_provider}/callback"
+        authorize_url, state = _build_scm_oauth_authorize_url(
+            root_dir,
+            provider=normalized_provider,
+            workspace_id=workspace_id,
+            callback_url=callback_url,
+        )
+        handler._send_json({"provider": normalized_provider, "authorize_url": authorize_url, "state": state})
+        return
     connection = _create_scm_connection(
         root_dir,
         workspace_id,
@@ -1205,6 +1246,38 @@ def handle_scm_oauth_start(handler: Any, provider: str, query: str, *, root_dir:
     )
     authorize_url = f"/ops/scm?oauth_status=connected&provider={normalized_provider}&connection_id={connection['scm_connection_id']}"
     handler._send_json({"provider": normalized_provider, "authorize_url": authorize_url, "state": f"state-{connection['scm_connection_id']}"})
+
+
+def handle_scm_oauth_callback(handler: Any, provider: str, query: str, *, root_dir: Path) -> None:
+    normalized_provider = str(provider or "").strip().lower()
+    params = parse_qs(query, keep_blank_values=False)
+    code = str((params.get("code") or [""])[0]).strip()
+    state = str((params.get("state") or [""])[0]).strip()
+    if not _scm_oauth_is_configured(root_dir, normalized_provider):
+        _send_redirect(handler, f"/ops/scm?oauth_status=error&message={normalized_provider}-oauth-not-configured")
+        return
+    if not code or not state:
+        _send_redirect(handler, "/ops/scm?oauth_status=error&message=missing-code-or-state")
+        return
+    callback_url = f"http://{handler.headers.get('Host', '127.0.0.1')}/api/v1/oauth/{normalized_provider}/callback"
+    try:
+        connection = _complete_scm_oauth_callback(
+            root_dir,
+            provider=normalized_provider,
+            code=code,
+            state=state,
+            callback_url=callback_url,
+        )
+        _send_redirect(handler, f"/ops/scm?oauth_status=connected&provider={normalized_provider}&connection_id={connection['scm_connection_id']}")
+    except Exception as exc:
+        _send_redirect(handler, f"/ops/scm?oauth_status=error&message={str(exc)}")
+
+
+def _send_redirect(handler: Any, location: str) -> None:
+    handler.send_response(HTTPStatus.SEE_OTHER)
+    handler.send_header("Location", location)
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
 
 
 def handle_repository_favorites_save(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
@@ -1296,7 +1369,9 @@ __all__ = [
     "handle_repository_search",
     "handle_repository_unanswered",
     "handle_scm_connections_create",
+    "handle_scm_connection_repositories_discover",
     "handle_scm_connections_list",
+    "handle_scm_oauth_callback",
     "handle_scm_deployment_plan",
     "handle_scm_oauth_start",
     "handle_scm_repositories_create",

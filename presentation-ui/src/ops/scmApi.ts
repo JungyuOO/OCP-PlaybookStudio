@@ -1,5 +1,6 @@
 import type {
   OpsScmConnectionRecord,
+  OpsScmDiscoveredRepository,
   OpsScmDeploymentPlan,
   OpsScmProvider,
   OpsScmRepositoryRecord,
@@ -56,6 +57,16 @@ type ApiScmDeploymentPlan = {
   commit_body: string;
   requires_pull_request: boolean;
   next_step: string;
+};
+
+type ApiScmDiscoveredRepository = {
+  provider: string;
+  external_id: string;
+  full_name: string;
+  name: string;
+  default_branch: string;
+  web_url: string;
+  visibility: string;
 };
 
 function apiUrl(path: string) {
@@ -130,6 +141,18 @@ function mapPlan(input: ApiScmDeploymentPlan): OpsScmDeploymentPlan {
   };
 }
 
+function mapDiscoveredRepository(input: ApiScmDiscoveredRepository): OpsScmDiscoveredRepository {
+  return {
+    provider: input.provider,
+    externalId: input.external_id,
+    fullName: input.full_name,
+    name: input.name,
+    defaultBranch: input.default_branch,
+    webUrl: input.web_url,
+    visibility: input.visibility,
+  };
+}
+
 export async function listScmConnections(workspaceId: string): Promise<OpsScmConnectionRecord[]> {
   const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections`));
   const payload = await readJson<{ items: ApiScmConnectionRecord[] }>(response);
@@ -187,4 +210,16 @@ export async function buildScmDeploymentPlan(workspaceId: string, repositoryId: 
     body: JSON.stringify(payload),
   });
   return mapPlan(await readJson<ApiScmDeploymentPlan>(response));
+}
+
+export async function discoverScmRepositories(
+  workspaceId: string,
+  connectionId: string,
+  query = '',
+  limit = 20,
+): Promise<OpsScmDiscoveredRepository[]> {
+  const search = new URLSearchParams({ query, limit: String(limit) });
+  const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections/${connectionId}/discover-repositories?${search.toString()}`));
+  const payload = await readJson<{ items: ApiScmDiscoveredRepository[] }>(response);
+  return (payload.items ?? []).map(mapDiscoveredRepository);
 }

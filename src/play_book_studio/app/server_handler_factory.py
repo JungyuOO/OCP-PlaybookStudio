@@ -66,7 +66,9 @@ from play_book_studio.app.server_routes import (
     handle_repository_search as _handle_repository_search_request,
     handle_repository_unanswered as _handle_repository_unanswered_request,
     handle_scm_connections_create as _handle_scm_connections_create_request,
+    handle_scm_connection_repositories_discover as _handle_scm_connection_repositories_discover_request,
     handle_scm_connections_list as _handle_scm_connections_list_request,
+    handle_scm_oauth_callback as _handle_scm_oauth_callback_request,
     handle_scm_deployment_plan as _handle_scm_deployment_plan_request,
     handle_scm_oauth_start as _handle_scm_oauth_start_request,
     handle_scm_repositories_create as _handle_scm_repositories_create_request,
@@ -227,6 +229,10 @@ def _build_handler(
                 provider = request_path.removeprefix("/api/v1/oauth/").removesuffix("/start").strip("/")
                 self._handle_scm_oauth_start(provider, parsed_request.query)
                 return
+            if request_path.startswith("/api/v1/oauth/") and request_path.endswith("/callback"):
+                provider = request_path.removeprefix("/api/v1/oauth/").removesuffix("/callback").strip("/")
+                self._handle_scm_oauth_callback(provider, parsed_request.query)
+                return
             if request_path.startswith("/api/v1/auth/ocp/status/"):
                 connection_id = request_path.removeprefix("/api/v1/auth/ocp/status/").strip()
                 self._handle_ocp_status(connection_id)
@@ -234,6 +240,12 @@ def _build_handler(
             if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/connections"):
                 workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/connections").strip("/")
                 self._handle_scm_connections_list(workspace_id)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and "/scm/connections/" in request_path and request_path.endswith("/discover-repositories"):
+                trimmed = request_path.removeprefix("/api/v1/workspaces/")
+                workspace_id, connection_id = trimmed.split("/scm/connections/", 1)
+                connection_id = connection_id.removesuffix("/discover-repositories").strip("/")
+                self._handle_scm_connection_repositories_discover(workspace_id.strip("/"), connection_id, parsed_request.query)
                 return
             if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/repositories"):
                 workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
@@ -509,10 +521,27 @@ def _build_handler(
                 root_dir=root_dir,
             )
 
+        def _handle_scm_oauth_callback(self, provider: str, query: str) -> None:
+            _handle_scm_oauth_callback_request(
+                self,
+                provider,
+                query,
+                root_dir=root_dir,
+            )
+
         def _handle_scm_connections_list(self, workspace_id: str) -> None:
             _handle_scm_connections_list_request(
                 self,
                 workspace_id,
+                root_dir=root_dir,
+            )
+
+        def _handle_scm_connection_repositories_discover(self, workspace_id: str, connection_id: str, query: str) -> None:
+            _handle_scm_connection_repositories_discover_request(
+                self,
+                workspace_id,
+                connection_id,
+                query,
                 root_dir=root_dir,
             )
 
