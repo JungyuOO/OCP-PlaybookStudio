@@ -9,12 +9,14 @@ import {
   discoverScmRepositories,
   listScmConnections,
   listScmRepositories,
+  previewScmConfigFile,
   startScmOauth,
   updateScmRepository,
 } from './scmApi';
 import { OpsShell } from './OpsShell';
 import type {
   OpsScmConfigPathCandidate,
+  OpsScmConfigPreview,
   OpsScmConnectionRecord,
   OpsScmDeploymentPlan,
   OpsScmDiscoveredRepository,
@@ -41,6 +43,7 @@ export default function OpsScmPage() {
   const [repoQuery, setRepoQuery] = useState('');
   const [discoveredRepositories, setDiscoveredRepositories] = useState<OpsScmDiscoveredRepository[]>([]);
   const [configCandidates, setConfigCandidates] = useState<OpsScmConfigPathCandidate[]>([]);
+  const [configPreview, setConfigPreview] = useState<OpsScmConfigPreview | null>(null);
   const [plan, setPlan] = useState<OpsScmDeploymentPlan | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -211,6 +214,21 @@ export default function OpsScmPage() {
     }
   }
 
+  async function handlePreviewConfigFile(nextPath: string) {
+    if (!selectedWorkspaceId || !connectionId || !repoFullName.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      const preview = await previewScmConfigFile(selectedWorkspaceId, connectionId, repoFullName, nextPath, 'main');
+      setConfigPreview(preview);
+      setMessage(`Loaded ${preview.path} for preview.`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to preview config file.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleTouchRepository(repository: OpsScmRepositoryRecord) {
     if (!selectedWorkspaceId) return;
     setLoading(true);
@@ -335,6 +353,7 @@ export default function OpsScmPage() {
                 onClick={() => {
                   setRepoFullName(item.fullName);
                   setConfigCandidates([]);
+                  setConfigPreview(null);
                 }}
               >
                 <div className="ops-list-main">
@@ -357,10 +376,11 @@ export default function OpsScmPage() {
                     key={`${item.path}:${item.manifestKind}`}
                     type="button"
                     className="ops-list-item"
-                    onClick={() => {
-                      setConfigPath(item.path);
-                      setManifestKind(item.manifestKind);
-                    }}
+                      onClick={() => {
+                        setConfigPath(item.path);
+                        setManifestKind(item.manifestKind);
+                        void handlePreviewConfigFile(item.path);
+                      }}
                   >
                     <div className="ops-list-main">
                       <strong>{item.path}</strong>
@@ -387,10 +407,11 @@ export default function OpsScmPage() {
                     key={`${item.path}:${item.manifestKind}`}
                     type="button"
                     className="ops-list-item"
-                    onClick={() => {
-                      setConfigPath(item.path);
-                      setManifestKind(item.manifestKind);
-                    }}
+                      onClick={() => {
+                        setConfigPath(item.path);
+                        setManifestKind(item.manifestKind);
+                        void handlePreviewConfigFile(item.path);
+                      }}
                   >
                     <div className="ops-list-main">
                       <strong>{item.path}</strong>
@@ -516,6 +537,22 @@ export default function OpsScmPage() {
             ))}
           </div>
           <pre className="ops-code-block"><code>{plan.commitTitle}{'\n\n'}{plan.commitBody}</code></pre>
+        </section>
+      ) : null}
+
+      {configPreview ? (
+        <section className="ops-card glass-panel">
+          <div className="ops-section-head">
+            <div><span className="ops-section-eyebrow">Config preview</span><h2>{configPreview.path}</h2></div>
+            <span className="ops-meta-chip">{configPreview.lineCount} lines</span>
+          </div>
+          <div className="ops-detail-grid">
+            <div><strong>Repository</strong><span>{configPreview.repoFullName}</span></div>
+            <div><strong>Ref</strong><span>{configPreview.ref}</span></div>
+            <div><strong>Bytes</strong><span>{configPreview.byteCount}</span></div>
+            <div><strong>Selected kind</strong><span>{manifestKind}</span></div>
+          </div>
+          <pre className="ops-code-block"><code>{configPreview.content}</code></pre>
         </section>
       ) : null}
     </OpsShell>

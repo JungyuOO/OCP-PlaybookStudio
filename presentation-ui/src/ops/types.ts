@@ -262,3 +262,12 @@ export type OpsScmConfigPathCandidate = {
   score: number;
   confidence: 'recommended' | 'fallback';
 };
+
+export type OpsScmConfigPreview = {
+  repoFullName: string;
+  ref: string;
+  path: string;
+  content: string;
+  lineCount: number;
+  byteCount: number;
+};

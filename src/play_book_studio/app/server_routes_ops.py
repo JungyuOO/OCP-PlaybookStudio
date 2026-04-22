@@ -65,6 +65,7 @@ from play_book_studio.app.scm_store import (
     list_connections as _list_scm_connections,
     list_repositories as _list_scm_repositories,
     oauth_is_configured as _scm_oauth_is_configured,
+    preview_config_file as _preview_scm_config_file,
     update_repository as _update_scm_repository,
 )
 from play_book_studio.app.workspace_store import (
@@ -1175,6 +1176,38 @@ def handle_scm_connection_config_paths_discover(handler: Any, workspace_id: str,
     handler._send_json(payload)
 
 
+def handle_scm_connection_config_file_preview(handler: Any, workspace_id: str, connection_id: str, query: str, *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    repo_full_name = str((params.get("repo_full_name") or [""])[0]).strip()
+    ref = str((params.get("ref") or [""])[0]).strip()
+    path = str((params.get("path") or [""])[0]).strip()
+    if not repo_full_name or not path:
+        handler._send_json({"error": "repo_full_name and path are required"}, HTTPStatus.BAD_REQUEST)
+        return
+    try:
+        payload = _preview_scm_config_file(
+            root_dir,
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            repo_full_name=repo_full_name,
+            path=path,
+            ref=ref,
+        )
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except requests.HTTPError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+        return
+    handler._send_json(payload)
+
+
 def handle_scm_connections_create(handler: Any, workspace_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
     if _get_workspace(root_dir, workspace_id) is None:
         handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
@@ -1403,6 +1436,7 @@ __all__ = [
     "handle_repository_unanswered",
     "handle_scm_connections_create",
     "handle_scm_connection_config_paths_discover",
+    "handle_scm_connection_config_file_preview",
     "handle_scm_connection_repositories_discover",
     "handle_scm_connections_list",
     "handle_scm_oauth_callback",

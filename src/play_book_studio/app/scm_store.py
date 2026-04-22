@@ -236,6 +236,30 @@ def _gitlab_headers_for_connection(root_dir: Path, connection: dict[str, Any]) -
     return headers
 
 
+def _gitlab_get_file_content_for_connection(root_dir: Path, connection: dict[str, Any], repo_full_name: str, ref: str, path: str) -> str:
+    import base64
+
+    target_path = str(path or "").strip().strip("/")
+    base = str(connection.get("host_url") or "").rstrip("/")
+    project_id = requests.utils.quote(repo_full_name, safe="")
+    encoded_path = requests.utils.quote(target_path, safe="")
+    response = requests.get(
+        f"{base}/api/v4/projects/{project_id}/repository/files/{encoded_path}",
+        headers=_gitlab_headers_for_connection(root_dir, connection),
+        params={"ref": ref},
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    if not isinstance(payload, dict):
+        raise ValueError("Unexpected GitLab file payload.")
+    content = str(payload.get("content") or "")
+    encoding = str(payload.get("encoding") or "").strip().lower()
+    if encoding != "base64":
+        raise ValueError("Unsupported GitLab file encoding.")
+    return base64.b64decode(content).decode("utf-8", errors="replace")
+
+
 def _fetch_github_repo(root_dir: Path, repo_full_name: str) -> dict[str, Any]:
     response = requests.get(
         f"https://api.github.com/repos/{repo_full_name}",
@@ -288,6 +312,27 @@ def _github_content_exists_for_connection(root_dir: Path, connection: dict[str, 
         return False
     response.raise_for_status()
     return True
+
+
+def _github_get_file_content_for_connection(root_dir: Path, connection: dict[str, Any], repo_full_name: str, ref: str, path: str) -> str:
+    import base64
+
+    target_path = str(path or "").strip().strip("/")
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/contents/{target_path}",
+        headers=_github_headers_for_connection(root_dir, connection),
+        params={"ref": ref},
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json() if response.content else {}
+    if not isinstance(payload, dict):
+        raise ValueError("Unexpected GitHub content payload.")
+    content = str(payload.get("content") or "")
+    encoding = str(payload.get("encoding") or "").strip().lower()
+    if encoding != "base64":
+        raise ValueError("Unsupported GitHub content encoding.")
+    return base64.b64decode(content).decode("utf-8", errors="replace")
 
 
 def discover_repositories(
@@ -542,6 +587,38 @@ def discover_config_paths(
     )
     return {
         "items": candidates[:max_items],
+    }
+
+
+def preview_config_file(
+    root_dir: Path,
+    *,
+    workspace_id: str,
+    connection_id: str,
+    repo_full_name: str,
+    path: str,
+    ref: str = "",
+) -> dict[str, Any]:
+    connection = get_connection(root_dir, connection_id)
+    if connection is None or str(connection.get("workspace_id") or "") != workspace_id:
+        raise LookupError("SCM connection not found.")
+
+    provider = str(connection.get("provider") or "").strip().lower()
+    branch = ref.strip() or "main"
+    if provider == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
+        content = _github_get_file_content_for_connection(root_dir, connection, repo_full_name, branch, path)
+    elif provider == "gitlab":
+        content = _gitlab_get_file_content_for_connection(root_dir, connection, repo_full_name, branch, path)
+    else:
+        raise ValueError("Real config-file preview is currently supported for GitHub.com and GitLab OAuth connections.")
+
+    return {
+        "repo_full_name": repo_full_name,
+        "ref": branch,
+        "path": path,
+        "content": content,
+        "line_count": len(content.splitlines()),
+        "byte_count": len(content.encode("utf-8")),
     }
 
 
@@ -809,5 +886,6 @@ __all__ = [
     "list_connections",
     "list_repositories",
     "oauth_is_configured",
+    "preview_config_file",
     "update_repository",
 ]

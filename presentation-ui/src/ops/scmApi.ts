@@ -1,5 +1,6 @@
 import type {
   OpsScmConfigPathCandidate,
+  OpsScmConfigPreview,
   OpsScmConnectionRecord,
   OpsScmDiscoveredRepository,
   OpsScmDeploymentPlan,
@@ -75,6 +76,15 @@ type ApiScmConfigPathCandidate = {
   manifest_kind: string;
   score: number;
   confidence: 'recommended' | 'fallback';
+};
+
+type ApiScmConfigPreview = {
+  repo_full_name: string;
+  ref: string;
+  path: string;
+  content: string;
+  line_count: number;
+  byte_count: number;
 };
 
 function apiUrl(path: string) {
@@ -170,6 +180,17 @@ function mapConfigPathCandidate(input: ApiScmConfigPathCandidate): OpsScmConfigP
   };
 }
 
+function mapConfigPreview(input: ApiScmConfigPreview): OpsScmConfigPreview {
+  return {
+    repoFullName: input.repo_full_name,
+    ref: input.ref,
+    path: input.path,
+    content: input.content,
+    lineCount: input.line_count,
+    byteCount: input.byte_count,
+  };
+}
+
 export async function listScmConnections(workspaceId: string): Promise<OpsScmConnectionRecord[]> {
   const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections`));
   const payload = await readJson<{ items: ApiScmConnectionRecord[] }>(response);
@@ -256,4 +277,16 @@ export async function discoverScmConfigPaths(
   const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections/${connectionId}/discover-config-paths?${search.toString()}`));
   const payload = await readJson<{ items: ApiScmConfigPathCandidate[] }>(response);
   return (payload.items ?? []).map(mapConfigPathCandidate);
+}
+
+export async function previewScmConfigFile(
+  workspaceId: string,
+  connectionId: string,
+  repoFullName: string,
+  path: string,
+  ref = 'main',
+): Promise<OpsScmConfigPreview> {
+  const search = new URLSearchParams({ repo_full_name: repoFullName, path, ref });
+  const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections/${connectionId}/preview-config-file?${search.toString()}`));
+  return mapConfigPreview(await readJson<ApiScmConfigPreview>(response));
 }
