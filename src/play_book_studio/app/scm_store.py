@@ -372,6 +372,117 @@ def discover_repositories(
     raise ValueError("Real repository discovery is currently supported for GitHub.com and GitLab OAuth connections.")
 
 
+def _candidate_manifest_kind(path: str) -> str:
+    normalized = str(path or "").strip().lower()
+    if normalized.endswith(("values.yaml", "values.yml")):
+        return "helm_values"
+    if normalized.endswith(("kustomization.yaml", "kustomization.yml")):
+        return "kustomize"
+    return "config_yaml"
+
+
+def _candidate_score(path: str) -> int:
+    normalized = str(path or "").strip().lower()
+    score = 0
+    if normalized == "config.yaml" or normalized == "config.yml":
+        score += 200
+    if normalized.endswith("config.yaml") or normalized.endswith("config.yml"):
+        score += 100
+    if normalized.endswith("values.yaml") or normalized.endswith("values.yml"):
+        score += 90
+    if normalized.endswith("kustomization.yaml") or normalized.endswith("kustomization.yml"):
+        score += 85
+    if "/deploy/" in normalized or "/deployment/" in normalized:
+        score += 25
+    if "/charts/" in normalized or "/helm/" in normalized:
+        score += 20
+    if "/kustomize/" in normalized or "/overlays/" in normalized:
+        score += 20
+    if normalized.count("/") < 4:
+        score += 10
+    return score
+
+
+def discover_config_paths(
+    root_dir: Path,
+    *,
+    workspace_id: str,
+    connection_id: str,
+    repo_full_name: str,
+    ref: str = "",
+    limit: int = 20,
+) -> dict[str, Any]:
+    connection = get_connection(root_dir, connection_id)
+    if connection is None or str(connection.get("workspace_id") or "") != workspace_id:
+        raise LookupError("SCM connection not found.")
+
+    provider = str(connection.get("provider") or "").strip().lower()
+    branch = ref.strip() or "main"
+    candidates: list[dict[str, Any]] = []
+    max_items = max(1, min(limit, 50))
+
+    if provider == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
+        tree_response = requests.get(
+            f"https://api.github.com/repos/{repo_full_name}/git/trees/{branch}",
+            headers=_github_headers_for_connection(root_dir, connection),
+            params={"recursive": "1"},
+            timeout=20,
+        )
+        tree_response.raise_for_status()
+        payload = tree_response.json() if tree_response.content else {}
+        entries = payload.get("tree") if isinstance(payload, dict) else []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or str(entry.get("type") or "") != "blob":
+                continue
+            path = str(entry.get("path") or "").strip()
+            if not path:
+                continue
+            manifest_kind = _candidate_manifest_kind(path)
+            if manifest_kind == "config_yaml" and not path.lower().endswith((".yaml", ".yml")):
+                continue
+            candidates.append(
+                {
+                    "path": path,
+                    "manifest_kind": manifest_kind,
+                    "score": _candidate_score(path),
+                }
+            )
+    elif provider == "gitlab":
+        base = str(connection.get("host_url") or "").rstrip("/")
+        project_id = requests.utils.quote(repo_full_name, safe="")
+        tree_response = requests.get(
+            f"{base}/api/v4/projects/{project_id}/repository/tree",
+            headers=_gitlab_headers_for_connection(root_dir, connection),
+            params={"recursive": "true", "ref": branch, "per_page": 100},
+            timeout=20,
+        )
+        tree_response.raise_for_status()
+        entries = tree_response.json() if tree_response.content else []
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or str(entry.get("type") or "") != "blob":
+                continue
+            path = str(entry.get("path") or "").strip()
+            if not path:
+                continue
+            manifest_kind = _candidate_manifest_kind(path)
+            if manifest_kind == "config_yaml" and not path.lower().endswith((".yaml", ".yml")):
+                continue
+            candidates.append(
+                {
+                    "path": path,
+                    "manifest_kind": manifest_kind,
+                    "score": _candidate_score(path),
+                }
+            )
+    else:
+        raise ValueError("Real config-path discovery is currently supported for GitHub.com and GitLab OAuth connections.")
+
+    candidates.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("path") or "")))
+    return {
+        "items": candidates[:max_items],
+    }
+
+
 def list_connections(root_dir: Path, workspace_id: str) -> dict[str, Any]:
     document = _read_document(root_dir)
     items = [item for item in document["connections"] if str(item.get("workspace_id") or "") == workspace_id]
@@ -629,6 +740,7 @@ __all__ = [
     "complete_oauth_callback",
     "create_connection",
     "create_repository",
+    "discover_config_paths",
     "discover_repositories",
     "get_connection",
     "get_repository",

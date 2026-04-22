@@ -1,4 +1,5 @@
 import type {
+  OpsScmConfigPathCandidate,
   OpsScmConnectionRecord,
   OpsScmDiscoveredRepository,
   OpsScmDeploymentPlan,
@@ -67,6 +68,12 @@ type ApiScmDiscoveredRepository = {
   default_branch: string;
   web_url: string;
   visibility: string;
+};
+
+type ApiScmConfigPathCandidate = {
+  path: string;
+  manifest_kind: string;
+  score: number;
 };
 
 function apiUrl(path: string) {
@@ -153,6 +160,14 @@ function mapDiscoveredRepository(input: ApiScmDiscoveredRepository): OpsScmDisco
   };
 }
 
+function mapConfigPathCandidate(input: ApiScmConfigPathCandidate): OpsScmConfigPathCandidate {
+  return {
+    path: input.path,
+    manifestKind: input.manifest_kind,
+    score: input.score,
+  };
+}
+
 export async function listScmConnections(workspaceId: string): Promise<OpsScmConnectionRecord[]> {
   const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections`));
   const payload = await readJson<{ items: ApiScmConnectionRecord[] }>(response);
@@ -222,4 +237,21 @@ export async function discoverScmRepositories(
   const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections/${connectionId}/discover-repositories?${search.toString()}`));
   const payload = await readJson<{ items: ApiScmDiscoveredRepository[] }>(response);
   return (payload.items ?? []).map(mapDiscoveredRepository);
+}
+
+export async function discoverScmConfigPaths(
+  workspaceId: string,
+  connectionId: string,
+  repoFullName: string,
+  ref = '',
+  limit = 20,
+): Promise<OpsScmConfigPathCandidate[]> {
+  const search = new URLSearchParams({
+    repo_full_name: repoFullName,
+    ref,
+    limit: String(limit),
+  });
+  const response = await fetch(apiUrl(`/api/v1/workspaces/${workspaceId}/scm/connections/${connectionId}/discover-config-paths?${search.toString()}`));
+  const payload = await readJson<{ items: ApiScmConfigPathCandidate[] }>(response);
+  return (payload.items ?? []).map(mapConfigPathCandidate);
 }

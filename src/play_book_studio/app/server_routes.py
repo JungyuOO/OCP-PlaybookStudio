@@ -54,6 +54,7 @@ from .server_routes_ops import (
     handle_repository_favorites_save,
     handle_repository_unanswered,
     handle_scm_connections_create,
+    handle_scm_connection_config_paths_discover,
     handle_scm_connection_repositories_discover,
     handle_scm_connections_list,
     handle_scm_oauth_callback,

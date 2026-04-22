@@ -54,6 +54,7 @@ from play_book_studio.app.action_store import (
 )
 from play_book_studio.app.scm_store import (
     build_oauth_authorize_url as _build_scm_oauth_authorize_url,
+    discover_config_paths as _discover_scm_config_paths,
     build_deployment_plan as _build_scm_deployment_plan,
     complete_oauth_callback as _complete_scm_oauth_callback,
     create_connection as _create_scm_connection,
@@ -1142,6 +1143,38 @@ def handle_scm_connection_repositories_discover(handler: Any, workspace_id: str,
     handler._send_json(payload)
 
 
+def handle_scm_connection_config_paths_discover(handler: Any, workspace_id: str, connection_id: str, query: str, *, root_dir: Path) -> None:
+    if _get_workspace(root_dir, workspace_id) is None:
+        handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
+        return
+    params = parse_qs(query, keep_blank_values=False)
+    repo_full_name = str((params.get("repo_full_name") or [""])[0]).strip()
+    ref = str((params.get("ref") or [""])[0]).strip()
+    limit = int(str((params.get("limit") or ["20"])[0]).strip() or "20")
+    if not repo_full_name:
+        handler._send_json({"error": "repo_full_name is required"}, HTTPStatus.BAD_REQUEST)
+        return
+    try:
+        payload = _discover_scm_config_paths(
+            root_dir,
+            workspace_id=workspace_id,
+            connection_id=connection_id,
+            repo_full_name=repo_full_name,
+            ref=ref,
+            limit=limit,
+        )
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except requests.HTTPError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+        return
+    handler._send_json(payload)
+
+
 def handle_scm_connections_create(handler: Any, workspace_id: str, payload: dict[str, Any], *, root_dir: Path) -> None:
     if _get_workspace(root_dir, workspace_id) is None:
         handler._send_json({"error": "Workspace not found."}, HTTPStatus.NOT_FOUND)
@@ -1369,6 +1402,7 @@ __all__ = [
     "handle_repository_search",
     "handle_repository_unanswered",
     "handle_scm_connections_create",
+    "handle_scm_connection_config_paths_discover",
     "handle_scm_connection_repositories_discover",
     "handle_scm_connections_list",
     "handle_scm_oauth_callback",

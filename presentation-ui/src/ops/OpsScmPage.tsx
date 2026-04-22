@@ -5,6 +5,7 @@ import {
   buildScmDeploymentPlan,
   createScmConnection,
   createScmRepository,
+  discoverScmConfigPaths,
   discoverScmRepositories,
   listScmConnections,
   listScmRepositories,
@@ -38,6 +39,7 @@ export default function OpsScmPage() {
   const [targetNamespace, setTargetNamespace] = useState('default');
   const [repoQuery, setRepoQuery] = useState('');
   const [discoveredRepositories, setDiscoveredRepositories] = useState<OpsScmDiscoveredRepository[]>([]);
+  const [configCandidates, setConfigCandidates] = useState<Array<{ path: string; manifestKind: string; score: number }>>([]);
   const [plan, setPlan] = useState<OpsScmDeploymentPlan | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -171,6 +173,21 @@ export default function OpsScmPage() {
     }
   }
 
+  async function handleDiscoverConfigPaths() {
+    if (!selectedWorkspaceId || !connectionId || !repoFullName.trim()) return;
+    setLoading(true);
+    setError('');
+    try {
+      const items = await discoverScmConfigPaths(selectedWorkspaceId, connectionId, repoFullName, 'main', 20);
+      setConfigCandidates(items);
+      setMessage(items.length > 0 ? `Found ${items.length} config path candidates.` : 'No config path candidates found.');
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : 'Failed to discover config paths.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleBuildPlan(repositoryId: string) {
     if (!selectedWorkspaceId) return;
     setLoading(true);
@@ -295,9 +312,14 @@ export default function OpsScmPage() {
               <span>Discover repositories from selected connection</span>
               <input value={repoQuery} onChange={(event) => setRepoQuery(event.target.value)} placeholder="search repositories" />
             </label>
-            <button type="button" className="ops-secondary-action" disabled={loading || !selectedWorkspaceId || !connectionId} onClick={() => void handleDiscoverRepositories()}>
-              Fetch repositories
-            </button>
+            <div className="ops-button-row">
+              <button type="button" className="ops-secondary-action" disabled={loading || !selectedWorkspaceId || !connectionId} onClick={() => void handleDiscoverRepositories()}>
+                Fetch repositories
+              </button>
+              <button type="button" className="ops-secondary-action" disabled={loading || !selectedWorkspaceId || !connectionId || !repoFullName.trim()} onClick={() => void handleDiscoverConfigPaths()}>
+                Discover config paths
+              </button>
+            </div>
           </div>
           <div className="ops-stack">
             {discoveredRepositories.map((item) => (
@@ -307,12 +329,28 @@ export default function OpsScmPage() {
                 className="ops-list-item"
                 onClick={() => {
                   setRepoFullName(item.fullName);
-                  setConfigPath('config.yaml');
+                  setConfigCandidates([]);
                 }}
               >
                 <div className="ops-list-main">
                   <strong>{item.fullName}</strong>
                   <span>{item.defaultBranch} · {item.visibility}</span>
+                </div>
+              </button>
+            ))}
+            {configCandidates.map((item) => (
+              <button
+                key={`${item.path}:${item.manifestKind}`}
+                type="button"
+                className="ops-list-item"
+                onClick={() => {
+                  setConfigPath(item.path);
+                  setManifestKind(item.manifestKind);
+                }}
+              >
+                <div className="ops-list-main">
+                  <strong>{item.path}</strong>
+                  <span>{item.manifestKind} · score {item.score}</span>
                 </div>
               </button>
             ))}

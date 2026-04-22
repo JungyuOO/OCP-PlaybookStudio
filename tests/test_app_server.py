@@ -613,6 +613,70 @@ def test_scm_repository_discovery_returns_provider_repositories() -> None:
         assert payload["items"][0]["full_name"] == "team/repo-one"
 
 
+def test_scm_config_path_discovery_returns_ranked_candidates() -> None:
+    class _FakeResponse:
+        def __init__(self, payload, status_code=200) -> None:
+            self._payload = payload
+            self.status_code = status_code
+            self.content = b"{}"
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"HTTP {self.status_code}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        _write_frontend_shell(root)
+        (root / ".env").write_text("GITHUB_CLASSIC_TOKEN=fake-token\n", encoding="utf-8")
+        real_requests_get = requests.get
+
+        def _fake_get(url, headers=None, params=None, timeout=None):  # noqa: ARG001
+            if url == "https://api.github.com/repos/team/repo-one/git/trees/main":
+                return _FakeResponse(
+                    {
+                        "tree": [
+                            {"path": "config.yaml", "type": "blob"},
+                            {"path": "deploy/values.yaml", "type": "blob"},
+                            {"path": "kustomize/overlays/prod/kustomization.yaml", "type": "blob"},
+                        ]
+                    }
+                )
+            return real_requests_get(url, headers=headers, params=params, timeout=timeout)
+
+        with patch("play_book_studio.app.scm_store.requests.get", side_effect=_fake_get):
+            with _test_server(root) as base_url:
+                workspace_response = requests.post(
+                    f"{base_url}/api/v1/workspaces",
+                    json={"name": "Config Discovery Workspace", "environment": "dev"},
+                    timeout=10,
+                )
+                workspace_id = workspace_response.json()["workspace_id"]
+                connection_response = requests.post(
+                    f"{base_url}/api/v1/workspaces/{workspace_id}/scm/connections",
+                    json={
+                        "provider": "github",
+                        "host_url": "https://github.com",
+                        "auth_type": "token",
+                        "account_label": "team-gh",
+                    },
+                    timeout=10,
+                )
+                connection_id = connection_response.json()["scm_connection_id"]
+                discover_response = requests.get(
+                    f"{base_url}/api/v1/workspaces/{workspace_id}/scm/connections/{connection_id}/discover-config-paths?repo_full_name=team/repo-one&ref=main",
+                    timeout=10,
+                )
+
+        assert discover_response.status_code == 200
+        payload = discover_response.json()
+        assert payload["items"]
+        assert payload["items"][0]["path"] == "config.yaml"
+        assert payload["items"][0]["manifest_kind"] == "config_yaml"
+
+
 def test_runtime_namespaces_resolve_viewer_html_instead_of_shared_spa_shell() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)

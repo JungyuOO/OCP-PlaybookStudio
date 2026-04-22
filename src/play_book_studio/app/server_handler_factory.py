@@ -66,6 +66,7 @@ from play_book_studio.app.server_routes import (
     handle_repository_search as _handle_repository_search_request,
     handle_repository_unanswered as _handle_repository_unanswered_request,
     handle_scm_connections_create as _handle_scm_connections_create_request,
+    handle_scm_connection_config_paths_discover as _handle_scm_connection_config_paths_discover_request,
     handle_scm_connection_repositories_discover as _handle_scm_connection_repositories_discover_request,
     handle_scm_connections_list as _handle_scm_connections_list_request,
     handle_scm_oauth_callback as _handle_scm_oauth_callback_request,
@@ -246,6 +247,12 @@ def _build_handler(
                 workspace_id, connection_id = trimmed.split("/scm/connections/", 1)
                 connection_id = connection_id.removesuffix("/discover-repositories").strip("/")
                 self._handle_scm_connection_repositories_discover(workspace_id.strip("/"), connection_id, parsed_request.query)
+                return
+            if request_path.startswith("/api/v1/workspaces/") and "/scm/connections/" in request_path and request_path.endswith("/discover-config-paths"):
+                trimmed = request_path.removeprefix("/api/v1/workspaces/")
+                workspace_id, connection_id = trimmed.split("/scm/connections/", 1)
+                connection_id = connection_id.removesuffix("/discover-config-paths").strip("/")
+                self._handle_scm_connection_config_paths_discover(workspace_id.strip("/"), connection_id, parsed_request.query)
                 return
             if request_path.startswith("/api/v1/workspaces/") and request_path.endswith("/scm/repositories"):
                 workspace_id = request_path.removeprefix("/api/v1/workspaces/").removesuffix("/scm/repositories").strip("/")
@@ -538,6 +545,15 @@ def _build_handler(
 
         def _handle_scm_connection_repositories_discover(self, workspace_id: str, connection_id: str, query: str) -> None:
             _handle_scm_connection_repositories_discover_request(
+                self,
+                workspace_id,
+                connection_id,
+                query,
+                root_dir=root_dir,
+            )
+
+        def _handle_scm_connection_config_paths_discover(self, workspace_id: str, connection_id: str, query: str) -> None:
+            _handle_scm_connection_config_paths_discover_request(
                 self,
                 workspace_id,
                 connection_id,

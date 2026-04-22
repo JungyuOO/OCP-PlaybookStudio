@@ -255,3 +255,9 @@ export type OpsScmDiscoveredRepository = {
   webUrl: string;
   visibility: string;
 };
+
+export type OpsScmConfigPathCandidate = {
+  path: string;
+  manifestKind: string;
+  score: number;
+};
