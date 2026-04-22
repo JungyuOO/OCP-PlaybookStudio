@@ -186,10 +186,13 @@ export default function OpsScmPage() {
     <OpsShell
       eyebrow="OCP Ops SCM"
       title="Repository-driven delivery"
-      description="This page now stores SCM connections, repository delivery profiles, OAuth bootstrap redirects, and synthetic deployment plans so the repo-driven OCP Ops lane has a concrete home."
+      description="This page now stores SCM connections, repository delivery profiles, OAuth bootstrap redirects, and deployment plans. GitHub repositories can be validated against the real provider API when a local GitHub token is configured."
     >
       {error ? <div className="ops-alert glass-panel">{error}</div> : null}
       {message ? <div className="ops-detail-card glass-panel">{message}</div> : null}
+      <div className="ops-detail-card glass-panel">
+        Live note: GitHub repository validation uses the local GitHub token from the environment when available. GitLab remains synthetic in this stage unless a real provider path is added next.
+      </div>
 
       <div className="ops-two-column">
         <section className="ops-card glass-panel">
@@ -315,7 +318,7 @@ export default function OpsScmPage() {
               <div key={item.scmConnectionId} className="ops-list-item is-static">
                 <div className="ops-list-main">
                   <strong>{item.provider} · {item.accountLabel}</strong>
-                  <span>{item.hostUrl} · {item.authType}</span>
+                  <span>{item.hostUrl} · {item.authType} · {item.status}</span>
                 </div>
               </div>
             )) : <div className="ops-empty">No SCM connections yet.</div>}
@@ -331,7 +334,7 @@ export default function OpsScmPage() {
               <div key={item.repositoryId} className="ops-list-item is-static">
                 <div className="ops-list-main">
                   <strong>{item.repoFullName}</strong>
-                  <span>{item.deliveryMode} · {item.configPath}</span>
+                  <span>{item.deliveryMode} · {item.defaultBranch} · {item.configPath} · {item.syncStatus}</span>
                 </div>
                 <div className="ops-action-links">
                   <button type="button" className="ops-link-button" onClick={() => void handleTouchRepository(item)}>Save</button>

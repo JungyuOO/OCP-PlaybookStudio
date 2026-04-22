@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
+import requests
+
 from play_book_studio.app.customer_pack_read_boundary import (
     blocked_customer_pack_draft_ids_from_payload,
     sanitize_debug_chat_log_entry,
@@ -1031,11 +1033,13 @@ def handle_ops_chat(handler: Any, payload: dict[str, Any], *, root_dir: Path) ->
 
 
 def handle_actions_preview(handler: Any, payload: dict[str, Any], *, root_dir: Path) -> None:
-    del root_dir
     try:
-        preview = _preview_action(payload)
+        preview = _preview_action(root_dir, payload)
     except ValueError as exc:
         handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         return
     handler._send_json(preview)
 
@@ -1045,6 +1049,9 @@ def handle_actions_requests_create(handler: Any, payload: dict[str, Any], *, roo
         record = _create_action_request(root_dir, payload)
     except ValueError as exc:
         handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         return
     handler._send_json(record, HTTPStatus.CREATED)
 
@@ -1137,6 +1144,12 @@ def handle_scm_repositories_create(handler: Any, workspace_id: str, payload: dic
     except ValueError as exc:
         handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         return
+    except LookupError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except requests.HTTPError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+        return
     handler._send_json(record, HTTPStatus.CREATED)
 
 
@@ -1152,6 +1165,9 @@ def handle_scm_repository_update(handler: Any, workspace_id: str, repository_id:
         record = _update_scm_repository(root_dir, repository_id, payload)
     except LookupError as exc:
         handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except requests.HTTPError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
         return
     handler._send_json(record)
 

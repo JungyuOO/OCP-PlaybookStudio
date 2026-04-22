@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -7,6 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from play_book_studio.config.settings import load_settings
+from play_book_studio.app.connection_store import (
+    get_profile as _get_connection_profile,
+    get_resource_detail as _get_resource_detail,
+)
 
 _ACTION_TYPES = {"scale_deployment", "rollout_restart", "log_bundle"}
 
@@ -75,13 +80,30 @@ def _append_audit(document: dict[str, Any], *, event_type: str, actor_id: str, p
     )
 
 
-def _preview_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _build_unified_diff(before: dict[str, Any], after: dict[str, Any]) -> str:
+    before_text = json.dumps(before or {}, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    after_text = json.dumps(after or {}, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+    return "\n".join(
+        difflib.unified_diff(
+            before_text,
+            after_text,
+            fromfile="before",
+            tofile="after",
+            lineterm="",
+        )
+    )
+
+
+def _preview_from_payload(root_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     action_type = str(payload.get("action_type") or "").strip()
     if action_type not in _ACTION_TYPES:
         raise ValueError("action_type must be scale_deployment, rollout_restart, or log_bundle")
     connection_id = str(payload.get("connection_id") or "").strip()
     if not connection_id:
         raise ValueError("connection_id is required")
+    profile = _get_connection_profile(root_dir, connection_id)
+    if profile is None:
+        raise LookupError("Connection profile not found.")
     namespace = str(payload.get("namespace") or "").strip()
     resource_name = str(payload.get("resource_name") or "").strip()
     if not resource_name:
@@ -94,6 +116,11 @@ def _preview_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     blocked_reasons: list[str] = []
     risk_level = "medium"
     required_approvals = 1
+    validation_messages: list[str] = []
+    policy_checks: list[str] = ["connection profile present", "action type recognized"]
+    diff_unified = ""
+    dry_run_status = "ok"
+    dry_run_messages: list[str] = []
 
     if action_type == "scale_deployment":
         risk_level = "high" if replicas >= 5 else "medium"
@@ -101,10 +128,52 @@ def _preview_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if replicas < 0:
             allowed = False
             blocked_reasons.append("replicas must be zero or greater")
+        detail = _get_resource_detail(root_dir, profile, resource="deployments", namespace=namespace, name=resource_name)
+        current_manifest = dict(detail.get("manifest_json") or {})
+        current_spec = dict(current_manifest.get("spec") or {})
+        current_replicas = int(current_spec.get("replicas") or 0)
+        desired_manifest = {
+            **current_manifest,
+            "spec": {
+                **current_spec,
+                "replicas": replicas,
+            },
+        }
+        diff_unified = _build_unified_diff(current_manifest, desired_manifest)
+        validation_messages.append(f"Current replicas: {current_replicas}")
+        validation_messages.append(f"Desired replicas: {replicas}")
+        dry_run_messages.append("Deployment exists and a synthetic diff was built from the live manifest.")
     elif action_type == "rollout_restart":
         risk_level = "medium"
+        detail = _get_resource_detail(root_dir, profile, resource="deployments", namespace=namespace, name=resource_name)
+        current_manifest = dict(detail.get("manifest_json") or {})
+        template = dict(((current_manifest.get("spec") or {}).get("template") or {}))
+        template_meta = dict(template.get("metadata") or {})
+        annotations = dict(template_meta.get("annotations") or {})
+        annotations["kubectl.kubernetes.io/restartedAt"] = _now_iso()
+        desired_manifest = {
+            **current_manifest,
+            "spec": {
+                **dict(current_manifest.get("spec") or {}),
+                "template": {
+                    **template,
+                    "metadata": {
+                        **template_meta,
+                        "annotations": annotations,
+                    },
+                },
+            },
+        }
+        diff_unified = _build_unified_diff(current_manifest, desired_manifest)
+        validation_messages.append("Deployment exists and rollout restart would patch pod template annotations.")
+        dry_run_messages.append("Synthetic restart diff built from the live deployment manifest.")
     elif action_type == "log_bundle":
         risk_level = "low"
+        detail = _get_resource_detail(root_dir, profile, resource="pods", namespace=namespace, name=resource_name)
+        current_manifest = dict(detail.get("manifest_json") or {})
+        diff_unified = _build_unified_diff(current_manifest, current_manifest)
+        validation_messages.append("Pod exists and is readable with the current connection profile.")
+        dry_run_messages.append("Read-only log bundle preview validated the target pod.")
 
     if break_glass:
         required_approvals = max(required_approvals, 2)
@@ -136,28 +205,25 @@ def _preview_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "break-glass requests require elevated scrutiny" if break_glass else "standard policy path",
             f"{required_approvals} approval(s) required before execution",
         ],
-        "policy_checks": [
-            "connection profile present",
-            "action type recognized",
-            "synthetic policy evaluation completed",
-        ],
+        "policy_checks": [*policy_checks, "live resource lookup completed"],
         "blocked_reasons": blocked_reasons,
         "validation_messages": [
-            "This preview is synthetic and does not mutate a live cluster yet.",
+            "Preview uses live resource reads but does not mutate the cluster.",
+            *validation_messages,
         ],
-        "diff_unified": f"--- current\n+++ desired\n@@\n-action: idle\n+action: {action_type}\n",
-        "dry_run_status": "completed",
-        "dry_run_messages": ["Synthetic dry-run completed."],
+        "diff_unified": diff_unified or f"--- current\n+++ desired\n@@\n-action: idle\n+action: {action_type}\n",
+        "dry_run_status": dry_run_status,
+        "dry_run_messages": dry_run_messages or ["Synthetic dry-run completed."],
         "next_step": "create_request" if allowed else "adjust_request",
     }
 
 
-def preview_action(payload: dict[str, Any]) -> dict[str, Any]:
-    return _preview_from_payload(payload)
+def preview_action(root_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    return _preview_from_payload(root_dir, payload)
 
 
 def create_request(root_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    preview = _preview_from_payload(payload)
+    preview = _preview_from_payload(root_dir, payload)
     actor_id = str(payload.get("actor_id") or "ui-local").strip() or "ui-local"
     timestamp = _now_iso()
     record = {

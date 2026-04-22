@@ -6,11 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from play_book_studio.config.settings import load_settings
+import requests
+
+from play_book_studio.config.settings import load_effective_env, load_settings
 
 _PROVIDERS = {"github", "gitlab"}
 _DELIVERY_MODES = {"gitops_commit", "cicd_pipeline"}
 _MANIFEST_KINDS = {"config_yaml", "helm_values", "kustomize"}
+_GITHUB_TOKEN_ENV_KEYS = ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_CLASSIC_TOKEN", "GITHUB_PAT")
 
 
 def _now_iso() -> str:
@@ -42,6 +45,54 @@ def _read_document(root_dir: Path) -> dict[str, Any]:
 
 def _write_document(root_dir: Path, payload: dict[str, Any]) -> None:
     _document_path(root_dir).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _github_token(root_dir: Path) -> str:
+    effective_env = load_effective_env(root_dir)
+    for key in _GITHUB_TOKEN_ENV_KEYS:
+        token = str(effective_env.get(key) or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def _github_headers(root_dir: Path) -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "OCP-PlaybookStudio/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = _github_token(root_dir)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _fetch_github_repo(root_dir: Path, repo_full_name: str) -> dict[str, Any]:
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}",
+        headers=_github_headers(root_dir),
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _github_content_exists(root_dir: Path, repo_full_name: str, ref: str, path: str) -> bool:
+    target_path = str(path or "").strip().strip("/")
+    if not target_path:
+        return False
+    response = requests.get(
+        f"https://api.github.com/repos/{repo_full_name}/contents/{target_path}",
+        headers=_github_headers(root_dir),
+        params={"ref": ref},
+        timeout=15,
+    )
+    if response.status_code == 404:
+        return False
+    response.raise_for_status()
+    return True
 
 
 def list_connections(root_dir: Path, workspace_id: str) -> dict[str, Any]:
@@ -106,20 +157,30 @@ def create_repository(root_dir: Path, workspace_id: str, payload: dict[str, Any]
         raise ValueError("delivery_mode must be gitops_commit or cicd_pipeline")
     if manifest_kind not in _MANIFEST_KINDS:
         raise ValueError("manifest_kind must be config_yaml, helm_values, or kustomize")
+    connection = get_connection(root_dir, connection_id)
+    if connection is None:
+        raise LookupError("SCM connection not found.")
+    default_branch = str(payload.get("default_branch") or "main").strip() or "main"
+    config_path = str(payload.get("config_path") or "config.yaml").strip() or "config.yaml"
+    sync_status = "connected"
+    if str(connection.get("provider") or "") == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
+        repo_payload = _fetch_github_repo(root_dir, repo_full_name)
+        default_branch = str(repo_payload.get("default_branch") or default_branch).strip() or default_branch
+        sync_status = "config_found" if _github_content_exists(root_dir, repo_full_name, default_branch, config_path) else "config_missing"
     timestamp = _now_iso()
     item = {
         "repository_id": f"repo-{uuid.uuid4().hex}",
         "workspace_id": workspace_id,
         "scm_connection_id": connection_id,
         "repo_full_name": repo_full_name,
-        "default_branch": str(payload.get("default_branch") or "main").strip() or "main",
-        "config_path": str(payload.get("config_path") or "config.yaml").strip() or "config.yaml",
+        "default_branch": default_branch,
+        "config_path": config_path,
         "delivery_mode": delivery_mode,
         "manifest_kind": manifest_kind,
         "target_cluster_url": str(payload.get("target_cluster_url") or "").strip(),
         "target_namespace": str(payload.get("target_namespace") or "default").strip() or "default",
         "auto_deploy_enabled": bool(payload.get("auto_deploy_enabled", True)),
-        "sync_status": "connected",
+        "sync_status": sync_status,
         "created_at": timestamp,
         "updated_at": timestamp,
     }
@@ -156,6 +217,15 @@ def update_repository(root_dir: Path, repository_id: str, payload: dict[str, Any
                 item[target_key] = value.strip()
         if isinstance(payload.get("auto_deploy_enabled"), bool):
             item["auto_deploy_enabled"] = bool(payload["auto_deploy_enabled"])
+        connection = get_connection(root_dir, str(item.get("scm_connection_id") or ""))
+        if connection and str(connection.get("provider") or "") == "github" and str(connection.get("host_url") or "").rstrip("/") == "https://github.com":
+            repo_payload = _fetch_github_repo(root_dir, str(item.get("repo_full_name") or ""))
+            item["default_branch"] = str(repo_payload.get("default_branch") or item.get("default_branch") or "main").strip() or "main"
+            item["sync_status"] = (
+                "config_found"
+                if _github_content_exists(root_dir, str(item.get("repo_full_name") or ""), str(item.get("default_branch") or "main"), str(item.get("config_path") or ""))
+                else "config_missing"
+            )
         item["updated_at"] = _now_iso()
         document["updated_at"] = item["updated_at"]
         _write_document(root_dir, document)

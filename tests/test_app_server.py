@@ -360,10 +360,24 @@ def test_actions_api_supports_preview_request_approval_execution_and_audit() -> 
         _write_frontend_shell(root)
 
         with _test_server(root) as base_url:
+            connection_response = requests.post(
+                f"{base_url}/api/v1/auth/ocp/connect",
+                json={
+                    "workspace_id": "ws-1",
+                    "cluster_url": "https://api.cluster.example.com:6443",
+                    "auth_mode": "token",
+                    "verify_ssl": True,
+                    "default_namespace": "openshift-monitoring",
+                    "display_name": "prod-cluster",
+                },
+                timeout=10,
+            )
+            connection_id = connection_response.json()["connection"]["connection_id"]
+
             preview_response = requests.post(
                 f"{base_url}/api/v1/actions/preview",
                 json={
-                    "connection_id": "conn-demo",
+                    "connection_id": connection_id,
                     "actor_id": "ui-local",
                     "actor_roles": ["operator"],
                     "action_type": "scale_deployment",
@@ -378,7 +392,7 @@ def test_actions_api_supports_preview_request_approval_execution_and_audit() -> 
             request_response = requests.post(
                 f"{base_url}/api/v1/actions/requests",
                 json={
-                    "connection_id": "conn-demo",
+                    "connection_id": connection_id,
                     "actor_id": "ui-local",
                     "actor_roles": ["operator"],
                     "action_type": "scale_deployment",
