@@ -13,8 +13,8 @@ const DEFAULT_FORM: OpsConnectionRequest = {
   workspaceId: '',
   clusterUrl: '',
   authMode: 'token',
-  verifySsl: true,
-  defaultNamespace: '',
+  verifySsl: false,
+  defaultNamespace: 'demo',
   displayName: '',
   saveProfile: true,
   token: '',
@@ -123,9 +123,12 @@ export default function OpsConnectionsPage() {
     <OpsShell
       eyebrow="OCP Ops Connections"
       title="Workspace-scoped cluster connections"
-      description="This surface now persists and lists cluster connection profiles inside the PlayBookStudio runtime. Live cluster verification is still stubbed, but the contract boundary is in place."
+      description="This surface now persists and lists cluster connection profiles inside the PlayBookStudio runtime. For the current cluster, the practical live path is `verify_ssl=false` with the `demo` namespace as the smoke-test baseline."
     >
       {error ? <div className="ops-alert glass-panel">{error}</div> : null}
+      <div className="ops-detail-card glass-panel">
+        Live note: the current OCP target uses a self-signed certificate chain, so `Verify SSL` should stay off unless the CA is trusted locally. Smoke-test namespace is `demo`.
+      </div>
 
       <div className="ops-two-column">
         <section className="ops-card glass-panel">
@@ -175,7 +178,7 @@ export default function OpsConnectionsPage() {
                 <input
                   value={form.defaultNamespace ?? ''}
                   onChange={(event) => setForm((current) => ({ ...current, defaultNamespace: event.target.value }))}
-                  placeholder="openshift-monitoring"
+                  placeholder="demo"
                 />
               </label>
             </div>
@@ -299,7 +302,7 @@ export default function OpsConnectionsPage() {
                 </div>
                 <div>
                   <strong>Namespace</strong>
-                  <span>{activeConnection.defaultNamespace || 'not set'}</span>
+                  <span>{activeConnection.defaultNamespace || 'demo'}</span>
                 </div>
                 <div>
                   <strong>User hint</strong>

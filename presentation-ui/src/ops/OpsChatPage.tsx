@@ -26,7 +26,7 @@ export default function OpsChatPage() {
   const [connections, setConnections] = useState<OpsConnectionProfile[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
   const [namespaces, setNamespaces] = useState<string[]>([]);
-  const [namespace, setNamespace] = useState('');
+  const [namespace, setNamespace] = useState('demo');
   const [message, setMessage] = useState('');
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -66,14 +66,14 @@ export default function OpsChatPage() {
   useEffect(() => {
     if (!selectedConnectionId) {
       setNamespaces([]);
-      setNamespace('');
+      setNamespace('demo');
       return;
     }
     async function loadNamespaces() {
       try {
         const payload = await getOpsNamespaces(selectedConnectionId);
         setNamespaces(payload.items);
-        setNamespace((current) => current || payload.items[0] || '');
+        setNamespace((current) => current || payload.items[0] || 'demo');
       } catch (nextError) {
         setError(nextError instanceof Error ? nextError.message : 'Failed to load namespaces.');
       }
@@ -120,6 +120,9 @@ export default function OpsChatPage() {
       description="This chat is separate from PlayBookStudio document chat. It uses the selected connection profile and namespace to produce operational answers tied to the synthetic cluster surface."
     >
       {error ? <div className="ops-alert glass-panel">{error}</div> : null}
+      <div className="ops-detail-card glass-panel">
+        Live smoke baseline for this cluster is the `demo` namespace. Keep the namespace there unless you know the token is authorized elsewhere.
+      </div>
 
       <div className="ops-card glass-panel">
         <div className="ops-context-grid">

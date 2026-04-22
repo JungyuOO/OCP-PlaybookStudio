@@ -884,6 +884,7 @@ def handle_ocp_test(handler: Any, payload: dict[str, Any], *, root_dir: Path) ->
         return
     handler._send_json(
         _build_ocp_test_result(
+            root_dir,
             profile,
             message="Stored connection profile check completed. Live cluster verification is not wired yet.",
         )
@@ -906,6 +907,7 @@ def handle_ocp_lease_refresh(handler: Any, payload: dict[str, Any], *, root_dir:
         return
     handler._send_json(
         _build_ocp_test_result(
+            root_dir,
             profile,
             message="Lease metadata refreshed from the stored profile. Real lease automation is not wired yet.",
         )
@@ -917,7 +919,12 @@ def handle_ocp_overview(handler: Any, connection_id: str, *, root_dir: Path) -> 
     if profile is None:
         handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
         return
-    handler._send_json(_build_ocp_overview(profile))
+    try:
+        handler._send_json(_build_ocp_overview(root_dir, profile))
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+    except Exception as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
 
 
 def handle_ocp_metrics(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
@@ -928,7 +935,12 @@ def handle_ocp_metrics(handler: Any, connection_id: str, query: str, *, root_dir
     params = parse_qs(query, keep_blank_values=False)
     window = str((params.get("window") or ["1h"])[0]).strip() or "1h"
     step = str((params.get("step") or ["5m"])[0]).strip() or "5m"
-    handler._send_json(_build_ocp_dashboard_metrics(profile, window=window, step=step))
+    try:
+        handler._send_json(_build_ocp_dashboard_metrics(root_dir, profile, window=window, step=step))
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+    except Exception as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
 
 
 def handle_ocp_namespaces(handler: Any, connection_id: str, *, root_dir: Path) -> None:
@@ -936,7 +948,12 @@ def handle_ocp_namespaces(handler: Any, connection_id: str, *, root_dir: Path) -
     if profile is None:
         handler._send_json({"error": "Connection profile not found."}, HTTPStatus.NOT_FOUND)
         return
-    handler._send_json(_build_ocp_namespaces(profile))
+    try:
+        handler._send_json(_build_ocp_namespaces(root_dir, profile))
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+    except Exception as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
 
 
 def handle_ocp_resources(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
@@ -950,7 +967,12 @@ def handle_ocp_resources(handler: Any, connection_id: str, query: str, *, root_d
     if not namespace:
         handler._send_json({"error": "namespace is required"}, HTTPStatus.BAD_REQUEST)
         return
-    handler._send_json(_list_ocp_resources(profile, resource=resource, namespace=namespace))
+    try:
+        handler._send_json(_list_ocp_resources(root_dir, profile, resource=resource, namespace=namespace))
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+    except Exception as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
 
 
 def handle_ocp_resource_detail(handler: Any, connection_id: str, query: str, *, root_dir: Path) -> None:
@@ -969,9 +991,15 @@ def handle_ocp_resource_detail(handler: Any, connection_id: str, query: str, *, 
         handler._send_json({"error": "name is required"}, HTTPStatus.BAD_REQUEST)
         return
     try:
-        payload = _get_ocp_resource_detail(profile, resource=resource, namespace=namespace, name=name)
+        payload = _get_ocp_resource_detail(root_dir, profile, resource=resource, namespace=namespace, name=name)
     except LookupError as exc:
         handler._send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        return
+    except ValueError as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return
+    except Exception as exc:
+        handler._send_json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
         return
     handler._send_json(payload)
 
@@ -993,6 +1021,7 @@ def handle_ops_chat(handler: Any, payload: dict[str, Any], *, root_dir: Path) ->
     history = payload.get("history") if isinstance(payload.get("history"), list) else []
     handler._send_json(
         _build_ops_chat_response(
+            root_dir,
             profile,
             message=message,
             namespace=namespace,

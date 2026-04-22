@@ -5,10 +5,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import requests
 
 from play_book_studio.config.settings import load_settings
 
 _VALID_AUTH_MODES = {"token", "password", "oauth_future"}
+_RESOURCE_CONFIG = {
+    "pods": {"path": "/api/v1/namespaces/{namespace}/pods", "kind": "Pod"},
+    "deployments": {"path": "/apis/apps/v1/namespaces/{namespace}/deployments", "kind": "Deployment"},
+    "services": {"path": "/api/v1/namespaces/{namespace}/services", "kind": "Service"},
+    "routes": {"path": "/apis/route.openshift.io/v1/namespaces/{namespace}/routes", "kind": "Route"},
+    "events": {"path": "/api/v1/namespaces/{namespace}/events", "kind": "Event"},
+}
 
 
 def _now() -> datetime:
@@ -19,11 +29,19 @@ def _iso(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
-def _document_path(root_dir: Path) -> Path:
+def _ops_dir(root_dir: Path) -> Path:
     settings = load_settings(root_dir)
     target_dir = settings.artifacts_dir / "ops"
     target_dir.mkdir(parents=True, exist_ok=True)
-    return target_dir / "connections.json"
+    return target_dir
+
+
+def _document_path(root_dir: Path) -> Path:
+    return _ops_dir(root_dir) / "connections.json"
+
+
+def _secrets_path(root_dir: Path) -> Path:
+    return _ops_dir(root_dir) / "connection-secrets.json"
 
 
 def _read_document(root_dir: Path) -> dict[str, Any]:
@@ -51,11 +69,61 @@ def _write_document(root_dir: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _read_secrets(root_dir: Path) -> dict[str, dict[str, str]]:
+    path = _secrets_path(root_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(key): {str(inner_key): str(inner_value) for inner_key, inner_value in value.items()}
+        for key, value in payload.items()
+        if isinstance(value, dict)
+    }
+
+
+def _write_secrets(root_dir: Path, payload: dict[str, dict[str, str]]) -> None:
+    _secrets_path(root_dir).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _store_secret(root_dir: Path, secret_ref: str, payload: dict[str, str]) -> None:
+    document = _read_secrets(root_dir)
+    document[secret_ref] = payload
+    _write_secrets(root_dir, document)
+
+
+def _load_secret(root_dir: Path, secret_ref: str) -> dict[str, str]:
+    return _read_secrets(root_dir).get(secret_ref, {})
+
+
+def _delete_secret(root_dir: Path, secret_ref: str) -> None:
+    document = _read_secrets(root_dir)
+    if secret_ref in document:
+        del document[secret_ref]
+        _write_secrets(root_dir, document)
+
+
 def _profile_sort_key(item: dict[str, Any]) -> tuple[str, str]:
     return (
         str(item.get("workspace_id") or "").lower(),
         str(item.get("display_name") or item.get("cluster_url") or "").lower(),
     )
+
+
+def _hostname(profile: dict[str, Any]) -> str:
+    return urlparse(str(profile.get("cluster_url") or "")).hostname or ""
+
+
+def _use_synthetic(profile: dict[str, Any]) -> bool:
+    hostname = _hostname(profile).lower()
+    return hostname == "example.com" or hostname.endswith(".example.com")
 
 
 def list_profiles(root_dir: Path, *, workspace_id: str = "") -> dict[str, Any]:
@@ -90,24 +158,46 @@ def create_profile(root_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if auth_mode not in _VALID_AUTH_MODES:
         raise ValueError("auth_mode must be token, password, or oauth_future")
 
+    synthetic_host = (urlparse(cluster_url).hostname or "").lower()
+    synthetic_allowance = synthetic_host == "example.com" or synthetic_host.endswith(".example.com")
+
+    if auth_mode == "token" and not str(payload.get("token") or "").strip() and not synthetic_allowance:
+        raise ValueError("token is required when auth_mode=token")
+    if auth_mode == "password":
+        if not str(payload.get("username") or "").strip():
+            raise ValueError("username is required when auth_mode=password")
+        if not str(payload.get("password") or "").strip():
+            raise ValueError("password is required when auth_mode=password")
+
     now = _now()
     expires_at = _iso(now + timedelta(hours=12))
+    secret_ref = f"ops://connections/{uuid.uuid4()}"
     username_hint = str(payload.get("username") or payload.get("display_name") or "").strip()
     item = {
         "workspace_id": str(payload.get("workspace_id") or "").strip(),
         "connection_id": str(uuid.uuid4()),
         "display_name": str(payload.get("display_name") or "").strip() or cluster_url,
-        "cluster_url": cluster_url,
+        "cluster_url": cluster_url.rstrip("/"),
         "auth_mode": auth_mode,
         "verify_ssl": bool(payload.get("verify_ssl", True)),
         "default_namespace": str(payload.get("default_namespace") or "").strip(),
         "username_hint": username_hint,
-        "secret_ref": f"ops://connections/{uuid.uuid4()}",
+        "secret_ref": secret_ref,
         "save_profile": bool(payload.get("save_profile", False)),
-        "status": "connected",
+        "status": "saved",
         "last_verified_at": "",
         "expires_at": expires_at,
     }
+    _store_secret(
+        root_dir,
+        secret_ref,
+        {
+            "auth_mode": auth_mode,
+            "token": str(payload.get("token") or "").strip(),
+            "username": str(payload.get("username") or "").strip(),
+            "password": str(payload.get("password") or "").strip(),
+        },
+    )
     document = _read_document(root_dir)
     document["items"].append(item)
     document["updated_at"] = _iso(now)
@@ -130,10 +220,142 @@ def disconnect_profile(root_dir: Path, connection_id: str) -> dict[str, Any] | N
     document["items"] = remaining
     document["updated_at"] = _iso(_now())
     _write_document(root_dir, document)
+    _delete_secret(root_dir, str(removed.get("secret_ref") or ""))
     return removed
 
 
-def build_test_result(profile: dict[str, Any], *, message: str) -> dict[str, Any]:
+def _requests_kwargs(root_dir: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    secret = _load_secret(root_dir, str(profile.get("secret_ref") or ""))
+    auth_mode = secret.get("auth_mode") or str(profile.get("auth_mode") or "")
+    kwargs: dict[str, Any] = {
+        "verify": bool(profile.get("verify_ssl", True)),
+        "timeout": 15,
+        "headers": {"Accept": "application/json"},
+    }
+    if auth_mode == "token":
+        token = secret.get("token", "").strip()
+        if not token:
+            raise ValueError("Stored token is missing for this connection profile.")
+        kwargs["headers"]["Authorization"] = f"Bearer {token}"
+    elif auth_mode == "password":
+        username = secret.get("username", "").strip()
+        password = secret.get("password", "")
+        if not username or not password:
+            raise ValueError("Stored username/password is missing for this connection profile.")
+        kwargs["auth"] = (username, password)
+    else:
+        raise ValueError("oauth_future is not available for live resource access yet.")
+    return kwargs
+
+
+def _request_json(root_dir: Path, profile: dict[str, Any], method: str, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    url = f"{str(profile.get('cluster_url') or '').rstrip('/')}{path}"
+    kwargs = _requests_kwargs(root_dir, profile)
+    response = requests.request(method=method, url=url, params=params, **kwargs)
+    response.raise_for_status()
+    return response.json() if response.content else {}
+
+
+def _safe_summary_value(value: Any, default: str = "") -> str:
+    return str(value or default).strip()
+
+
+def _summarize_resource(resource: str, item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata", {}) or {}
+    status = item.get("status", {}) or {}
+    spec = item.get("spec", {}) or {}
+    summary = {
+        "name": _safe_summary_value(metadata.get("name")),
+        "namespace": _safe_summary_value(metadata.get("namespace")),
+        "kind": _RESOURCE_CONFIG[resource]["kind"],
+        "created_at": _safe_summary_value(metadata.get("creationTimestamp")),
+        "phase": "",
+        "node_name": "",
+        "ready_replicas": 0,
+        "replicas": 0,
+        "type": "",
+        "cluster_ip": "",
+        "host": "",
+        "to": "",
+    }
+    if resource == "pods":
+        summary["phase"] = _safe_summary_value(status.get("phase"))
+        summary["node_name"] = _safe_summary_value(spec.get("nodeName"))
+    elif resource == "deployments":
+        summary["ready_replicas"] = int(status.get("readyReplicas") or 0)
+        summary["replicas"] = int(spec.get("replicas") or 0)
+    elif resource == "services":
+        summary["type"] = _safe_summary_value(spec.get("type"))
+        summary["cluster_ip"] = _safe_summary_value(spec.get("clusterIP"))
+    elif resource == "routes":
+        summary["host"] = _safe_summary_value(spec.get("host"))
+        summary["to"] = _safe_summary_value((spec.get("to") or {}).get("name"))
+    elif resource == "events":
+        involved = item.get("involvedObject", {}) or {}
+        summary["type"] = _safe_summary_value(item.get("type"))
+        summary["phase"] = _safe_summary_value(item.get("reason"))
+        summary["to"] = _safe_summary_value(involved.get("name"))
+        summary["host"] = _safe_summary_value(involved.get("kind"))
+    return summary
+
+
+def _dump_yaml(value: Any, indent: int = 0) -> str:
+    return "\n".join(_dump_yaml_lines(value, indent=indent))
+
+
+def _dump_yaml_lines(value: Any, *, indent: int) -> list[str]:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        if not value:
+            return [f"{prefix}{{}}"]
+        lines: list[str] = []
+        for key, item in value.items():
+            if isinstance(item, (dict, list)):
+                if not item:
+                    empty_value = "{}" if isinstance(item, dict) else "[]"
+                    lines.append(f"{prefix}{key}: {empty_value}")
+                else:
+                    lines.append(f"{prefix}{key}:")
+                    lines.extend(_dump_yaml_lines(item, indent=indent + 2))
+            else:
+                lines.append(f"{prefix}{key}: {_yaml_scalar(item)}")
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [f"{prefix}[]"]
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, (dict, list)):
+                if not item:
+                    empty_value = "{}" if isinstance(item, dict) else "[]"
+                    lines.append(f"{prefix}- {empty_value}")
+                else:
+                    lines.append(f"{prefix}-")
+                    lines.extend(_dump_yaml_lines(item, indent=indent + 2))
+            else:
+                lines.append(f"{prefix}- {_yaml_scalar(item)}")
+        return lines
+    return [f"{prefix}{_yaml_scalar(value)}"]
+
+
+def _yaml_scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    text = str(value)
+    if not text:
+        return '""'
+    if "\n" in text:
+        return json.dumps(text, ensure_ascii=False)
+    if all(char.isalnum() or char in "-_./:@" for char in text):
+        return text
+    return json.dumps(text, ensure_ascii=False)
+
+
+def _synthetic_test_result(profile: dict[str, Any], *, message: str) -> dict[str, Any]:
     now = _now()
     return {
         "success": True,
@@ -145,7 +367,7 @@ def build_test_result(profile: dict[str, Any], *, message: str) -> dict[str, Any
         "resolved_roles": ["ops-viewer"],
         "identity_source": "stored_profile",
         "permission_hints": {"can_view_namespaces": True, "can_view_resources": True},
-        "rbac_evidence": ["Profile saved locally; live RBAC verification is not wired yet."],
+        "rbac_evidence": ["Synthetic fallback used for example.com test fixture."],
         "rbac_rules_incomplete": False,
         "rbac_evaluation_error": "",
         "secret_backend": "local_artifact_store",
@@ -163,6 +385,79 @@ def build_test_result(profile: dict[str, Any], *, message: str) -> dict[str, Any
         "message": message,
         "error": "",
     }
+
+
+def build_test_result(root_dir: Path, profile: dict[str, Any], *, message: str) -> dict[str, Any]:
+    if _use_synthetic(profile):
+        return _synthetic_test_result(profile, message=message)
+
+    now = _now()
+    try:
+        namespaces = build_namespaces(root_dir, profile)
+        resolved_namespace = str(profile.get("default_namespace") or "").strip() or (namespaces["items"][0] if namespaces["items"] else "")
+        resolved_user = str(profile.get("username_hint") or "").strip()
+        try:
+            user_payload = _request_json(root_dir, profile, "GET", "/apis/user.openshift.io/v1/users/~")
+            resolved_user = _safe_summary_value((user_payload.get("metadata") or {}).get("name"), resolved_user or "unknown")
+        except Exception:
+            resolved_user = resolved_user or "unknown"
+        return {
+            "success": True,
+            "connection_id": str(profile.get("connection_id") or ""),
+            "cluster_url": str(profile.get("cluster_url") or ""),
+            "auth_mode": str(profile.get("auth_mode") or "token"),
+            "resolved_user": resolved_user,
+            "resolved_groups": [],
+            "resolved_roles": [],
+            "identity_source": "live_api",
+            "permission_hints": {"can_view_namespaces": True, "can_view_resources": True},
+            "rbac_evidence": [f"namespace_count={namespaces['count']}"],
+            "rbac_rules_incomplete": True,
+            "rbac_evaluation_error": "Detailed RBAC expansion is not wired in this baseline yet.",
+            "secret_backend": "local_artifact_store",
+            "secret_version": "1",
+            "secret_created_at": _iso(now),
+            "secret_lease_renewable": False,
+            "secret_lease_ttl_seconds": 0,
+            "secret_lease_expires_at": str(profile.get("expires_at") or ""),
+            "secret_rotation_supported": False,
+            "secret_auto_renew_applied": False,
+            "secret_auto_renew_threshold_seconds": 0,
+            "secret_renew_message": "Lease automation is not wired in this baseline yet.",
+            "resolved_namespace": resolved_namespace,
+            "expires_at": str(profile.get("expires_at") or ""),
+            "message": message or "Live cluster connectivity verified.",
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "connection_id": str(profile.get("connection_id") or ""),
+            "cluster_url": str(profile.get("cluster_url") or ""),
+            "auth_mode": str(profile.get("auth_mode") or "token"),
+            "resolved_user": "",
+            "resolved_groups": [],
+            "resolved_roles": [],
+            "identity_source": "live_api",
+            "permission_hints": {"can_view_namespaces": False, "can_view_resources": False},
+            "rbac_evidence": [],
+            "rbac_rules_incomplete": True,
+            "rbac_evaluation_error": str(exc),
+            "secret_backend": "local_artifact_store",
+            "secret_version": "1",
+            "secret_created_at": _iso(now),
+            "secret_lease_renewable": False,
+            "secret_lease_ttl_seconds": 0,
+            "secret_lease_expires_at": str(profile.get("expires_at") or ""),
+            "secret_rotation_supported": False,
+            "secret_auto_renew_applied": False,
+            "secret_auto_renew_threshold_seconds": 0,
+            "secret_renew_message": "Lease automation is not wired in this baseline yet.",
+            "resolved_namespace": str(profile.get("default_namespace") or ""),
+            "expires_at": str(profile.get("expires_at") or ""),
+            "message": "",
+            "error": str(exc),
+        }
 
 
 def build_status_response(profile: dict[str, Any] | None, *, message: str) -> dict[str, Any]:
@@ -210,20 +505,10 @@ def _stable_seed(profile: dict[str, Any]) -> int:
     return sum(ord(char) for char in base)
 
 
-def build_overview(profile: dict[str, Any]) -> dict[str, Any]:
+def _synthetic_overview(profile: dict[str, Any]) -> dict[str, Any]:
     seed = _stable_seed(profile)
     namespace = str(profile.get("default_namespace") or "").strip()
-    namespace_sample = [
-        item
-        for item in [
-            namespace,
-            "default",
-            "openshift-monitoring",
-            "openshift-ingress",
-            "openshift-config",
-        ]
-        if item
-    ]
+    namespace_sample = [item for item in [namespace, "default", "openshift-monitoring", "openshift-ingress", "openshift-config"] if item]
     namespace_sample = list(dict.fromkeys(namespace_sample))[:5]
     return {
         "connection_id": str(profile.get("connection_id") or ""),
@@ -238,11 +523,32 @@ def build_overview(profile: dict[str, Any]) -> dict[str, Any]:
             "services": 6 + (seed % 8),
             "routes": 2 + (seed % 5),
         },
-        "message": "Synthetic overview generated from the stored connection profile. Replace this with live cluster telemetry in the next integration step.",
+        "message": "Synthetic overview generated from the stored connection profile.",
     }
 
 
-def build_dashboard_metrics(profile: dict[str, Any], *, window: str, step: str) -> dict[str, Any]:
+def build_overview(root_dir: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    if _use_synthetic(profile):
+        return _synthetic_overview(profile)
+    namespaces = build_namespaces(root_dir, profile)
+    namespace = str(profile.get("default_namespace") or "").strip() or (namespaces["items"][0] if namespaces["items"] else "")
+    resource_counts: dict[str, int] = {}
+    if namespace:
+        for resource in ("pods", "deployments", "services", "routes", "events"):
+            resource_counts[resource] = int(list_resources(root_dir, profile, resource=resource, namespace=namespace)["count"])
+    return {
+        "connection_id": str(profile.get("connection_id") or ""),
+        "cluster_url": str(profile.get("cluster_url") or ""),
+        "default_namespace": namespace,
+        "namespace_count": namespaces["count"],
+        "namespace_sample": namespaces["items"][:8],
+        "resource_counts": resource_counts,
+        "message": "Overview loaded from live cluster.",
+    }
+
+
+def build_dashboard_metrics(root_dir: Path, profile: dict[str, Any], *, window: str, step: str) -> dict[str, Any]:
+    del root_dir
     seed = _stable_seed(profile)
     base_timestamp = int(_now().timestamp())
     points = 12
@@ -252,12 +558,7 @@ def build_dashboard_metrics(profile: dict[str, Any], *, window: str, step: str) 
         for index in range(points):
             wave = ((seed + index * 17) % 11) - 5
             value = max(0.0, current + wave)
-            values.append(
-                {
-                    "timestamp": base_timestamp - ((points - index) * 300),
-                    "value": round(value, 2),
-                }
-            )
+            values.append({"timestamp": base_timestamp - ((points - index) * 300), "value": round(value, 2)})
         return {
             "metric_id": metric_id,
             "label": label,
@@ -284,20 +585,9 @@ def build_dashboard_metrics(profile: dict[str, Any], *, window: str, step: str) 
     }
 
 
-def build_namespaces(profile: dict[str, Any]) -> dict[str, Any]:
+def _synthetic_namespaces(profile: dict[str, Any]) -> dict[str, Any]:
     default_namespace = str(profile.get("default_namespace") or "").strip()
-    items = [
-        item
-        for item in [
-            default_namespace,
-            "default",
-            "openshift-monitoring",
-            "openshift-ingress",
-            "openshift-config",
-            "openshift-operators",
-        ]
-        if item
-    ]
+    items = [item for item in [default_namespace, "default", "openshift-monitoring", "openshift-ingress", "openshift-config", "openshift-operators"] if item]
     items = list(dict.fromkeys(items))
     return {
         "connection_id": str(profile.get("connection_id") or ""),
@@ -307,11 +597,42 @@ def build_namespaces(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _resource_seed(profile: dict[str, Any], *, namespace: str, resource: str) -> int:
+def build_namespaces(root_dir: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    if _use_synthetic(profile):
+        return _synthetic_namespaces(profile)
+    default_namespace = str(profile.get("default_namespace") or "").strip()
+    try:
+        payload = _request_json(root_dir, profile, "GET", "/api/v1/namespaces")
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        if response is not None and response.status_code == 403 and default_namespace:
+            return {
+                "connection_id": str(profile.get("connection_id") or ""),
+                "cluster_url": str(profile.get("cluster_url") or ""),
+                "count": 1,
+                "items": [default_namespace],
+            }
+        raise
+    items = [
+        str((item.get("metadata", {}) or {}).get("name") or "").strip()
+        for item in payload.get("items", []) or []
+    ]
+    items = [item for item in items if item]
+    if not items and default_namespace:
+        items = [default_namespace]
+    return {
+        "connection_id": str(profile.get("connection_id") or ""),
+        "cluster_url": str(profile.get("cluster_url") or ""),
+        "count": len(items),
+        "items": items,
+    }
+
+
+def _synthetic_resource_seed(profile: dict[str, Any], *, namespace: str, resource: str) -> int:
     return _stable_seed(profile) + sum(ord(char) for char in f"{namespace}|{resource}")
 
 
-def _resource_count(seed: int, resource: str) -> int:
+def _synthetic_resource_count(seed: int, resource: str) -> int:
     match resource:
         case "pods":
             return 6 + (seed % 6)
@@ -327,7 +648,7 @@ def _resource_count(seed: int, resource: str) -> int:
             return 0
 
 
-def _resource_name(resource: str, index: int) -> str:
+def _synthetic_resource_name(resource: str, index: int) -> str:
     match resource:
         case "pods":
             return f"ops-pod-{index:02d}"
@@ -343,27 +664,20 @@ def _resource_name(resource: str, index: int) -> str:
             return f"{resource}-{index:02d}"
 
 
-def list_resources(profile: dict[str, Any], *, resource: str, namespace: str) -> dict[str, Any]:
-    seed = _resource_seed(profile, namespace=namespace, resource=resource)
-    count = _resource_count(seed, resource)
+def _synthetic_list_resources(profile: dict[str, Any], *, resource: str, namespace: str) -> dict[str, Any]:
+    seed = _synthetic_resource_seed(profile, namespace=namespace, resource=resource)
+    count = _synthetic_resource_count(seed, resource)
     items = []
     for index in range(1, count + 1):
         phase = "Running"
-        kind = resource[:-1].capitalize() if resource.endswith("s") else resource.capitalize()
-        if resource == "deployments":
-            kind = "Deployment"
-        elif resource == "services":
-            kind = "Service"
-        elif resource == "routes":
-            kind = "Route"
-        elif resource == "events":
-            kind = "Event"
+        kind = _RESOURCE_CONFIG[resource]["kind"]
+        if resource == "events":
             phase = "Normal" if index % 2 else "Warning"
-        ready_replicas = 1 + ((seed + index) % 3) if resource in {"deployments"} else 0
-        replicas = ready_replicas + ((seed + index) % 2) if resource in {"deployments"} else 0
+        ready_replicas = 1 + ((seed + index) % 3) if resource == "deployments" else 0
+        replicas = ready_replicas + ((seed + index) % 2) if resource == "deployments" else 0
         items.append(
             {
-                "name": _resource_name(resource, index),
+                "name": _synthetic_resource_name(resource, index),
                 "namespace": namespace,
                 "kind": kind,
                 "created_at": _iso(_now() - timedelta(minutes=index * 11)),
@@ -387,13 +701,33 @@ def list_resources(profile: dict[str, Any], *, resource: str, namespace: str) ->
     }
 
 
-def get_resource_detail(profile: dict[str, Any], *, resource: str, namespace: str, name: str) -> dict[str, Any]:
-    listing = list_resources(profile, resource=resource, namespace=namespace)
+def list_resources(root_dir: Path, profile: dict[str, Any], *, resource: str, namespace: str) -> dict[str, Any]:
+    if resource not in _RESOURCE_CONFIG:
+        raise ValueError(f"unsupported resource: {resource}")
+    if _use_synthetic(profile):
+        return _synthetic_list_resources(profile, resource=resource, namespace=namespace)
+    resolved_namespace = namespace or str(profile.get("default_namespace") or "").strip()
+    if not resolved_namespace:
+        raise ValueError("namespace is required")
+    path = _RESOURCE_CONFIG[resource]["path"].format(namespace=resolved_namespace)
+    payload = _request_json(root_dir, profile, "GET", path)
+    items = [_summarize_resource(resource, item) for item in payload.get("items", []) or []]
+    return {
+        "connection_id": str(profile.get("connection_id") or ""),
+        "cluster_url": str(profile.get("cluster_url") or ""),
+        "resource": resource,
+        "namespace": resolved_namespace,
+        "count": len(items),
+        "items": items,
+    }
+
+
+def _synthetic_get_resource_detail(profile: dict[str, Any], *, resource: str, namespace: str, name: str) -> dict[str, Any]:
+    listing = _synthetic_list_resources(profile, resource=resource, namespace=namespace)
     matched = next((item for item in listing["items"] if str(item.get("name") or "") == name), None)
     if matched is None:
         raise LookupError("Resource not found.")
-
-    manifest = {
+    manifest: dict[str, Any] = {
         "apiVersion": "v1" if resource in {"pods", "services", "events"} else "apps/v1" if resource == "deployments" else "route.openshift.io/v1",
         "kind": matched["kind"],
         "metadata": {
@@ -404,38 +738,16 @@ def get_resource_detail(profile: dict[str, Any], *, resource: str, namespace: st
                 "ops.playbookstudio.io/profile": str(profile.get("connection_id") or ""),
             },
         },
-        "spec": {
-            "resource": resource,
-            "namespace": namespace,
-        },
-        "status": {
-            "phase": matched["phase"],
-        },
+        "spec": {"resource": resource, "namespace": namespace},
+        "status": {"phase": matched["phase"]},
     }
     if resource == "deployments":
-        manifest["spec"] = {
-            **manifest["spec"],
-            "replicas": matched["replicas"],
-            "selector": {"matchLabels": {"app": matched["name"]}},
-        }
-        manifest["status"] = {
-            **manifest["status"],
-            "readyReplicas": matched["ready_replicas"],
-            "replicas": matched["replicas"],
-        }
+        manifest["spec"] = {**manifest["spec"], "replicas": matched["replicas"], "selector": {"matchLabels": {"app": matched["name"]}}}
+        manifest["status"] = {**manifest["status"], "readyReplicas": matched["ready_replicas"], "replicas": matched["replicas"]}
     if resource == "services":
-        manifest["spec"] = {
-            **manifest["spec"],
-            "type": matched["type"],
-            "clusterIP": matched["cluster_ip"],
-        }
+        manifest["spec"] = {**manifest["spec"], "type": matched["type"], "clusterIP": matched["cluster_ip"]}
     if resource == "routes":
-        manifest["spec"] = {
-            **manifest["spec"],
-            "host": matched["host"],
-            "to": {"name": matched["to"]},
-        }
-    manifest_yaml = json.dumps(manifest, ensure_ascii=False, indent=2)
+        manifest["spec"] = {**manifest["spec"], "host": matched["host"], "to": {"name": matched["to"]}}
     return {
         "connection_id": str(profile.get("connection_id") or ""),
         "cluster_url": str(profile.get("cluster_url") or ""),
@@ -443,12 +755,36 @@ def get_resource_detail(profile: dict[str, Any], *, resource: str, namespace: st
         "namespace": namespace,
         "name": matched["name"],
         "kind": matched["kind"],
-        "manifest_yaml": manifest_yaml,
+        "manifest_yaml": json.dumps(manifest, ensure_ascii=False, indent=2),
         "manifest_json": manifest,
     }
 
 
+def get_resource_detail(root_dir: Path, profile: dict[str, Any], *, resource: str, namespace: str, name: str) -> dict[str, Any]:
+    if _use_synthetic(profile):
+        return _synthetic_get_resource_detail(profile, resource=resource, namespace=namespace, name=name)
+    resolved_namespace = namespace or str(profile.get("default_namespace") or "").strip()
+    if not resolved_namespace:
+        raise ValueError("namespace is required")
+    if not name.strip():
+        raise ValueError("name is required")
+    path = f"{_RESOURCE_CONFIG[resource]['path'].format(namespace=resolved_namespace)}/{name}"
+    payload = _request_json(root_dir, profile, "GET", path)
+    summary = _summarize_resource(resource, payload)
+    return {
+        "connection_id": str(profile.get("connection_id") or ""),
+        "cluster_url": str(profile.get("cluster_url") or ""),
+        "resource": resource,
+        "namespace": resolved_namespace,
+        "name": summary["name"],
+        "kind": summary["kind"],
+        "manifest_yaml": _dump_yaml(payload),
+        "manifest_json": payload,
+    }
+
+
 def build_ops_chat_response(
+    root_dir: Path,
     profile: dict[str, Any],
     *,
     message: str,
@@ -457,20 +793,19 @@ def build_ops_chat_response(
 ) -> dict[str, Any]:
     del history
     normalized = str(message or "").strip().lower()
-    namespaces = build_namespaces(profile)
+    namespaces = build_namespaces(root_dir, profile)
     resolved_namespace = namespace.strip() or str(profile.get("default_namespace") or "").strip() or (namespaces["items"][0] if namespaces["items"] else "")
     resource_hint_present = any(
         token in normalized
-        for token in ("pod", "pods", "deployment", "deployments", "service", "services", "route", "routes", "event", "events", "배포", "서비스", "이벤트")
+        for token in ("pod", "pods", "deployment", "deployments", "service", "services", "route", "routes", "event", "events")
     )
 
-    if any(token in normalized for token in ("namespace", "namespaces", "네임스페이스")) and not resource_hint_present:
+    if any(token in normalized for token in ("namespace", "namespaces")) and not resource_hint_present:
         items = namespaces["items"][:5]
         answer = (
-            f"현재 연결 프로필 기준으로 {namespaces['count']}개의 namespace가 보입니다. "
-            f"샘플은 {', '.join(items)} 입니다."
+            f"{namespaces['count']} namespaces are visible for the current connection profile. Sample namespaces: {', '.join(items)}."
             if items
-            else "현재 연결 프로필에서 확인 가능한 namespace가 없습니다."
+            else "No namespaces are visible for the current connection profile."
         )
         return {
             "connection_id": str(profile.get("connection_id") or ""),
@@ -483,31 +818,29 @@ def build_ops_chat_response(
         }
 
     resource = "pods"
-    if any(token in normalized for token in ("deployment", "deployments", "배포")):
+    if any(token in normalized for token in ("deployment", "deployments")):
         resource = "deployments"
-    elif any(token in normalized for token in ("service", "services", "서비스")):
+    elif any(token in normalized for token in ("service", "services")):
         resource = "services"
     elif any(token in normalized for token in ("route", "routes")):
         resource = "routes"
-    elif any(token in normalized for token in ("event", "events", "이벤트")):
+    elif any(token in normalized for token in ("event", "events")):
         resource = "events"
 
-    listing = list_resources(profile, resource=resource, namespace=resolved_namespace)
+    listing = list_resources(root_dir, profile, resource=resource, namespace=resolved_namespace)
     items = listing["items"][:5]
     summary_names = ", ".join(str(item.get("name") or "") for item in items if str(item.get("name") or "").strip())
     count = int(listing.get("count") or 0)
-
     answer = (
-        f"{resolved_namespace} namespace에서 {resource} {count}개를 확인했습니다. "
-        f"대표 항목은 {summary_names} 입니다."
+        f"I found {count} {resource} in namespace {resolved_namespace}. Representative items: {summary_names}."
         if items
-        else f"{resolved_namespace} namespace에서 확인된 {resource}가 없습니다."
+        else f"No {resource} were found in namespace {resolved_namespace}."
     )
 
-    if any(token in normalized for token in ("yaml", "manifest", "상세", "detail")) and items:
+    if any(token in normalized for token in ("yaml", "manifest", "detail")) and items:
         first_name = str(items[0].get("name") or "")
-        detail = get_resource_detail(profile, resource=resource, namespace=resolved_namespace, name=first_name)
-        answer += f" 첫 항목 `{first_name}` 의 manifest도 바로 열 수 있습니다."
+        detail = get_resource_detail(root_dir, profile, resource=resource, namespace=resolved_namespace, name=first_name)
+        answer += f" The manifest for {first_name} is available in the sidecar."
         return {
             "connection_id": str(profile.get("connection_id") or ""),
             "cluster_url": str(profile.get("cluster_url") or ""),
@@ -534,14 +867,14 @@ __all__ = [
     "build_lease_status",
     "build_dashboard_metrics",
     "build_namespaces",
+    "build_ops_chat_response",
     "build_overview",
     "build_status_response",
     "build_test_result",
     "create_profile",
     "disconnect_profile",
-    "build_ops_chat_response",
-    "get_resource_detail",
     "get_profile",
-    "list_resources",
+    "get_resource_detail",
     "list_profiles",
+    "list_resources",
 ]

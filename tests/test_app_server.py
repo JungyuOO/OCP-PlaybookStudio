@@ -184,7 +184,7 @@ def test_ocp_connection_api_creates_lists_and_disconnects_profiles() -> None:
                     "cluster_url": "https://api.cluster.example.com:6443",
                     "auth_mode": "token",
                     "verify_ssl": True,
-                    "default_namespace": "openshift-monitoring",
+                    "default_namespace": "demo",
                     "display_name": "prod-cluster",
                     "username": "developer",
                     "save_profile": True,
@@ -240,7 +240,7 @@ def test_ocp_overview_and_metrics_api_return_operational_payloads() -> None:
                     "cluster_url": "https://api.cluster.example.com:6443",
                     "auth_mode": "token",
                     "verify_ssl": True,
-                    "default_namespace": "openshift-monitoring",
+                    "default_namespace": "demo",
                     "display_name": "prod-cluster",
                 },
                 timeout=10,
@@ -278,7 +278,7 @@ def test_ocp_resource_api_returns_namespaces_list_and_manifest_detail() -> None:
                     "cluster_url": "https://api.cluster.example.com:6443",
                     "auth_mode": "token",
                     "verify_ssl": True,
-                    "default_namespace": "openshift-monitoring",
+                    "default_namespace": "demo",
                     "display_name": "prod-cluster",
                 },
                 timeout=10,
@@ -287,30 +287,30 @@ def test_ocp_resource_api_returns_namespaces_list_and_manifest_detail() -> None:
 
             namespaces_response = requests.get(f"{base_url}/api/v1/ocp/namespaces/{connection_id}", timeout=10)
             resources_response = requests.get(
-                f"{base_url}/api/v1/ocp/resources/{connection_id}?resource=pods&namespace=openshift-monitoring",
+                f"{base_url}/api/v1/ocp/resources/{connection_id}?resource=pods&namespace=demo",
                 timeout=10,
             )
             resource_name = resources_response.json()["items"][0]["name"]
             detail_response = requests.get(
-                f"{base_url}/api/v1/ocp/resource-detail/{connection_id}?resource=pods&namespace=openshift-monitoring&name={resource_name}",
+                f"{base_url}/api/v1/ocp/resource-detail/{connection_id}?resource=pods&namespace=demo&name={resource_name}",
                 timeout=10,
             )
 
         assert namespaces_response.status_code == 200
         namespaces = namespaces_response.json()
         assert namespaces["connection_id"] == connection_id
-        assert "openshift-monitoring" in namespaces["items"]
+        assert "demo" in namespaces["items"]
 
         assert resources_response.status_code == 200
         resources = resources_response.json()
         assert resources["resource"] == "pods"
-        assert resources["namespace"] == "openshift-monitoring"
+        assert resources["namespace"] == "demo"
         assert resources["count"] >= 1
 
         assert detail_response.status_code == 200
         detail = detail_response.json()
         assert detail["name"] == resource_name
-        assert detail["namespace"] == "openshift-monitoring"
+        assert detail["namespace"] == "demo"
         assert "metadata" in detail["manifest_yaml"]
 
 
@@ -327,7 +327,7 @@ def test_ops_chat_api_returns_operational_answer_and_resource_items() -> None:
                     "cluster_url": "https://api.cluster.example.com:6443",
                     "auth_mode": "token",
                     "verify_ssl": True,
-                    "default_namespace": "openshift-monitoring",
+                    "default_namespace": "demo",
                     "display_name": "prod-cluster",
                 },
                 timeout=10,
@@ -338,8 +338,8 @@ def test_ops_chat_api_returns_operational_answer_and_resource_items() -> None:
                 f"{base_url}/api/v1/ops/chat",
                 json={
                     "connection_id": connection_id,
-                    "message": "openshift-monitoring namespace의 pod 보여줘",
-                    "namespace": "openshift-monitoring",
+                    "message": "demo namespace의 pod 보여줘",
+                    "namespace": "demo",
                     "history": [],
                 },
                 timeout=10,
@@ -349,7 +349,7 @@ def test_ops_chat_api_returns_operational_answer_and_resource_items() -> None:
         payload = chat_response.json()
         assert payload["connection_id"] == connection_id
         assert payload["mode"] in {"resource_list", "resource_detail", "namespace_list"}
-        assert payload["namespace"] == "openshift-monitoring"
+        assert payload["namespace"] == "demo"
         assert isinstance(payload["answer"], str)
         assert payload["items"]
 
