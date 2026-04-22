@@ -24,7 +24,7 @@ from .graph_sidecar import (
     refresh_active_runtime_graph_artifacts,
 )
 from .manifest import read_manifest, write_manifest
-from .models import ChunkRecord, SourceManifestEntry
+from .models import ChunkRecord, SourceManifestEntry, chunk_corpus_bm25_row, compact_chunk_corpus_row
 from .qdrant_store import upsert_chunks
 from .synthesis_lane import synthesis_lane_report_path, write_synthesis_lane_outputs
 from .translation_draft_generation import generate_translation_drafts
@@ -133,42 +133,6 @@ def _write_playbook_payloads(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-
-
-def _bm25_row(chunk_row: dict[str, object]) -> dict[str, object]:
-    chunk_type = str(chunk_row.get("chunk_type", "reference"))
-    return {
-        "chunk_id": chunk_row["chunk_id"],
-        "book_slug": chunk_row["book_slug"],
-        "chapter": chunk_row["chapter"],
-        "section": chunk_row["section"],
-        "anchor": chunk_row["anchor"],
-        "source_url": chunk_row["source_url"],
-        "viewer_path": chunk_row["viewer_path"],
-        "text": chunk_row["text"],
-        "section_path": list(chunk_row.get("section_path", [])),
-        "chunk_type": chunk_type,
-        "source_id": chunk_row["source_id"],
-        "source_lane": chunk_row["source_lane"],
-        "source_type": chunk_row["source_type"],
-        "source_collection": chunk_row["source_collection"],
-        "product": chunk_row["product"],
-        "version": chunk_row["version"],
-        "locale": chunk_row["locale"],
-        "translation_status": chunk_row["translation_status"],
-        "review_status": chunk_row["review_status"],
-        "trust_score": chunk_row["trust_score"],
-        "semantic_role": (
-            "procedure"
-            if chunk_type in {"procedure", "command"}
-            else ("concept" if chunk_type == "concept" else "reference")
-        ),
-        "cli_commands": list(chunk_row.get("cli_commands", [])),
-        "error_strings": list(chunk_row.get("error_strings", [])),
-        "k8s_objects": list(chunk_row.get("k8s_objects", [])),
-        "operator_names": list(chunk_row.get("operator_names", [])),
-        "verification_hints": list(chunk_row.get("verification_hints", [])),
-    }
 
 
 def _chunk_records(rows: list[dict[str, object]]) -> list[ChunkRecord]:
@@ -287,7 +251,7 @@ def _approved_chunk_rows(
                 "trust_score": float(payload.get("trust_score") or TRANSLATED_GOLD_TRUST_SCORE),
             }
         )
-        updated.append(payload)
+        updated.append(compact_chunk_corpus_row(payload))
     return updated
 
 
@@ -596,7 +560,7 @@ def promote_translation_gold(
 
         promoted_sections.extend(approved_section_rows)
         promoted_chunks.extend(approved_chunk_rows)
-        promoted_bm25_rows.extend(_bm25_row(row) for row in approved_chunk_rows)
+        promoted_bm25_rows.extend(chunk_corpus_bm25_row(row) for row in approved_chunk_rows)
         promoted_playbooks.append(approved_playbook)
         promoted_entries.append(approved_entry)
         reports.append(

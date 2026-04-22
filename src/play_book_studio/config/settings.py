@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -62,6 +64,7 @@ ENV_REFERENCE_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Z
 DEFAULT_CORE_PACK = default_core_pack()
 DEFAULT_BOOK_URL_TEMPLATE = DEFAULT_CORE_PACK.book_url_template
 DEFAULT_VIEWER_PATH_TEMPLATE = DEFAULT_CORE_PACK.viewer_path_template
+_OFFICIAL_LANE_SEED_STATE: dict[str, tuple[tuple[str, bool, int, int], ...]] = {}
 
 
 def _parse_csv_tuple(value: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -224,6 +227,32 @@ class Settings(SettingsPathMixin):
     def graph_sidecar_compact_path(self) -> Path:
         return self.graph_sidecar_path.with_name("graph_sidecar_compact.json")
 
+
+def _path_state_signature(path: Path) -> tuple[str, bool, int, int]:
+    target = Path(path).resolve()
+    try:
+        stat = target.stat()
+    except FileNotFoundError:
+        return (str(target), False, 0, 0)
+    size = int(stat.st_size) if target.is_file() else 0
+    return (str(target), True, int(stat.st_mtime_ns), size)
+
+
+def _official_lane_source_signature(settings: Settings) -> tuple[tuple[str, bool, int, int], ...]:
+    tracked_official_seed = settings.data_dir / "official_lane" / "repo_wide_official_source"
+    watched_paths = (
+        tracked_official_seed / "chunks.jsonl",
+        tracked_official_seed / "bm25_corpus.jsonl",
+        tracked_official_seed / "playbook_documents.jsonl",
+        tracked_official_seed / "normalized_docs.jsonl",
+        tracked_official_seed / "playbooks",
+        settings.gold_corpus_ko_dir / "chunks.jsonl",
+        settings.gold_corpus_ko_dir / "bm25_corpus.jsonl",
+        settings.gold_manualbook_ko_dir / "playbook_documents.jsonl",
+        settings.gold_manualbook_ko_dir / "playbooks",
+    )
+    return tuple(_path_state_signature(path) for path in watched_paths)
+
 def load_effective_env(root_dir: str | Path) -> dict[str, str]:
     """`.env` overlay를 반영한 환경 맵을 반환한다.
 
@@ -270,6 +299,134 @@ def load_effective_env(root_dir: str | Path) -> dict[str, str]:
     return effective_env
 
 
+def _copy_missing_tree(src_root: Path, dst_root: Path) -> bool:
+    if not src_root.exists() or not src_root.is_dir():
+        return False
+    copied = False
+    for src_path in src_root.rglob("*"):
+        if not src_path.is_file():
+            continue
+        relative = src_path.relative_to(src_root)
+        dst_path = dst_root / relative
+        if dst_path.exists():
+            continue
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+        copied = True
+    return copied
+
+
+def _copy_missing_file(src_path: Path, dst_path: Path) -> bool:
+    if not src_path.exists() or not src_path.is_file() or dst_path.exists():
+        return False
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_path, dst_path)
+    return True
+
+
+def _append_missing_jsonl_book_rows(src_path: Path, dst_path: Path) -> bool:
+    if not src_path.exists() or not src_path.is_file():
+        return False
+    existing_slugs: set[str] = set()
+    if dst_path.exists() and dst_path.is_file():
+        for raw_line in dst_path.read_text(encoding="utf-8").splitlines():
+            if not raw_line.strip():
+                continue
+            try:
+                payload = json.loads(raw_line)
+            except Exception:
+                continue
+            slug = str(payload.get("book_slug") or "").strip()
+            if slug:
+                existing_slugs.add(slug)
+
+    appended = False
+    rows_to_append: list[str] = []
+    for raw_line in src_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except Exception:
+            continue
+        slug = str(payload.get("book_slug") or "").strip()
+        if not slug or slug in existing_slugs:
+            continue
+        existing_slugs.add(slug)
+        rows_to_append.append(raw_line)
+    if not rows_to_append:
+        return False
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    with dst_path.open("a", encoding="utf-8") as handle:
+        for raw_line in rows_to_append:
+            handle.write(raw_line)
+            if not raw_line.endswith("\n"):
+                handle.write("\n")
+    return True
+
+
+def _has_official_lane_seed(target_root: Path) -> bool:
+    return (
+        (target_root / "chunks.jsonl").exists()
+        and (target_root / "bm25_corpus.jsonl").exists()
+        and (target_root / "playbook_documents.jsonl").exists()
+        and any((target_root / "playbooks").glob("*.json"))
+    )
+
+
+def _ensure_official_lane_seed(settings: Settings) -> None:
+    target_root = settings.artifacts_dir / "official_lane" / "repo_wide_official_source"
+    target_root.mkdir(parents=True, exist_ok=True)
+    seed_key = str(target_root.resolve())
+    source_signature = _official_lane_source_signature(settings)
+    if _OFFICIAL_LANE_SEED_STATE.get(seed_key) == source_signature and _has_official_lane_seed(target_root):
+        return
+
+    tracked_official_seed = settings.data_dir / "official_lane" / "repo_wide_official_source"
+    if tracked_official_seed.exists() and tracked_official_seed.is_dir():
+        _append_missing_jsonl_book_rows(
+            tracked_official_seed / "chunks.jsonl",
+            target_root / "chunks.jsonl",
+        )
+        _append_missing_jsonl_book_rows(
+            tracked_official_seed / "bm25_corpus.jsonl",
+            target_root / "bm25_corpus.jsonl",
+        )
+        _append_missing_jsonl_book_rows(
+            tracked_official_seed / "playbook_documents.jsonl",
+            target_root / "playbook_documents.jsonl",
+        )
+        _copy_missing_file(
+            tracked_official_seed / "normalized_docs.jsonl",
+            target_root / "normalized_docs.jsonl",
+        )
+        _copy_missing_tree(
+            tracked_official_seed / "playbooks",
+            target_root / "playbooks",
+        )
+        if _has_official_lane_seed(target_root):
+            _OFFICIAL_LANE_SEED_STATE[seed_key] = source_signature
+            return
+
+    _append_missing_jsonl_book_rows(
+        settings.gold_corpus_ko_dir / "chunks.jsonl",
+        target_root / "chunks.jsonl",
+    )
+    _append_missing_jsonl_book_rows(
+        settings.gold_corpus_ko_dir / "bm25_corpus.jsonl",
+        target_root / "bm25_corpus.jsonl",
+    )
+    _append_missing_jsonl_book_rows(
+        settings.gold_manualbook_ko_dir / "playbook_documents.jsonl",
+        target_root / "playbook_documents.jsonl",
+    )
+    _copy_missing_tree(
+        settings.gold_manualbook_ko_dir / "playbooks",
+        target_root / "playbooks",
+    )
+    _OFFICIAL_LANE_SEED_STATE[seed_key] = source_signature
+
+
 def load_settings(root_dir: str | Path) -> Settings:
     # `.env`를 읽어 별도 overlay로 해석하고, `os.environ` 자체는 건드리지 않는다.
     # 그래야 endpoint 변경이 재현 가능하고 숨은 전역 부작용을 막을 수 있다.
@@ -278,7 +435,7 @@ def load_settings(root_dir: str | Path) -> Settings:
     root_path = Path(root_dir)
     effective_env = load_effective_env(root_path)
 
-    return Settings(
+    settings = Settings(
         root_dir=root_path,
         artifacts_dir_override=effective_env.get("ARTIFACTS_DIR", "").strip(),
         raw_html_dir_override=effective_env.get("RAW_HTML_DIR", "").strip(),
@@ -348,3 +505,5 @@ def load_settings(root_dir: str | Path) -> Settings:
         surya_health_endpoint=effective_env.get("SURYA_HEALTH", "").strip().rstrip("/"),
         surya_timeout_seconds=float(effective_env.get("SURYA_TIMEOUT_SECONDS", "30")),
     )
+    _ensure_official_lane_seed(settings)
+    return settings

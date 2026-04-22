@@ -4,6 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,6 +23,7 @@ COPY schemas /app/schemas
 RUN mkdir -p /app/artifacts /app/reports /app/tmp /app/tmp_source
 
 RUN pip install --upgrade pip setuptools wheel && \
+    pip install --index-url ${TORCH_CPU_INDEX_URL} --extra-index-url ${PYPI_INDEX_URL} torch torchvision && \
     pip install -e .
 
 FROM node:22-bookworm-slim AS frontend-build

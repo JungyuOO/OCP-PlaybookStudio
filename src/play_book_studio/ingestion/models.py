@@ -42,6 +42,24 @@ DEFAULT_PROVIDER_EGRESS_POLICY = "unspecified"
 DEFAULT_CLASSIFICATION = "public"
 DEFAULT_BUNDLE_SCOPE = "official"
 DEFAULT_REDACTION_STATE = "not_required"
+COMPACT_CHUNK_CORPUS_DROP_FIELDS = frozenset(
+    {
+        "anchor_id",
+        "source_language",
+        "display_language",
+        "translation_status",
+        "translation_stage",
+        "translation_source_language",
+        "translation_source_url",
+        "translation_source_fingerprint",
+        "product",
+        "version",
+        "locale",
+        "verifiability",
+        "citation_eligible",
+        "citation_block_reason",
+    }
+)
 
 
 def _contract_translation_status(status: str) -> str:
@@ -92,6 +110,55 @@ def _contract_publication_state(
     if approval_state == "approved" and citation_eligible:
         return "published"
     return "candidate"
+
+
+def compact_chunk_corpus_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in COMPACT_CHUNK_CORPUS_DROP_FIELDS
+    }
+
+
+def chunk_corpus_bm25_row(chunk_row: dict[str, Any]) -> dict[str, Any]:
+    chunk_type = str(chunk_row.get("chunk_type", "reference"))
+    translation_status = str(
+        chunk_row.get("translation_status")
+        or chunk_row.get("translation_stage")
+        or "approved_ko"
+    )
+    return {
+        "chunk_id": chunk_row["chunk_id"],
+        "book_slug": chunk_row["book_slug"],
+        "chapter": chunk_row["chapter"],
+        "section": chunk_row["section"],
+        "anchor": chunk_row["anchor"],
+        "source_url": chunk_row["source_url"],
+        "viewer_path": chunk_row["viewer_path"],
+        "text": chunk_row["text"],
+        "section_path": list(chunk_row.get("section_path", [])),
+        "chunk_type": chunk_type,
+        "source_id": chunk_row["source_id"],
+        "source_lane": chunk_row["source_lane"],
+        "source_type": chunk_row["source_type"],
+        "source_collection": chunk_row["source_collection"],
+        "product": str(chunk_row.get("product") or "openshift"),
+        "version": str(chunk_row.get("version") or "4.20"),
+        "locale": str(chunk_row.get("locale") or "ko"),
+        "translation_status": translation_status,
+        "review_status": str(chunk_row.get("review_status") or "unreviewed"),
+        "trust_score": float(chunk_row.get("trust_score", 1.0) or 1.0),
+        "semantic_role": (
+            "procedure"
+            if chunk_type in {"procedure", "command"}
+            else ("concept" if chunk_type == "concept" else "reference")
+        ),
+        "cli_commands": list(chunk_row.get("cli_commands", [])),
+        "error_strings": list(chunk_row.get("error_strings", [])),
+        "k8s_objects": list(chunk_row.get("k8s_objects", [])),
+        "operator_names": list(chunk_row.get("operator_names", [])),
+        "verification_hints": list(chunk_row.get("verification_hints", [])),
+    }
 
 
 @dataclass(slots=True)
@@ -465,6 +532,9 @@ class ChunkRecord:
             citation_eligible=bool(self.citation_eligible),
         )
         return payload
+
+    def to_corpus_row(self) -> dict[str, Any]:
+        return compact_chunk_corpus_row(self.to_dict())
 
 
 @dataclass(slots=True)

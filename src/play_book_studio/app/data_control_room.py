@@ -21,6 +21,7 @@ from play_book_studio.app.data_control_room_buckets import (
 )
 from play_book_studio.config.settings import load_settings
 from play_book_studio.intake import CustomerPackDraftStore
+from play_book_studio.runtime_catalog_registry import official_runtime_book_registry
 
 from .data_control_room_helpers import (
     _build_high_value_focus,
@@ -105,6 +106,126 @@ def build_data_control_room_payload(root_dir: str | Path) -> dict[str, object]:
     return _build_data_control_room_payload_cached(str(root), fingerprint)
 
 
+def _synthesized_source_books(
+    *,
+    root: Path,
+    manifest_by_slug: dict[str, dict[str, object]],
+) -> list[dict[str, object]]:
+    registry = official_runtime_book_registry(root)
+    books: list[dict[str, object]] = []
+    for slug, manifest_entry in manifest_by_slug.items():
+        runtime_entry = registry.get(slug, {})
+        review_status = str(
+            manifest_entry.get("review_status")
+            or manifest_entry.get("approval_status")
+            or runtime_entry.get("review_status")
+            or ""
+        ).strip()
+        content_status = str(
+            manifest_entry.get("content_status")
+            or manifest_entry.get("translation_status")
+            or runtime_entry.get("content_status")
+            or ""
+        ).strip()
+        approval_status = str(
+            manifest_entry.get("approval_status")
+            or manifest_entry.get("approval_state")
+            or runtime_entry.get("approval_state")
+            or review_status
+        ).strip()
+        books.append(
+            {
+                "book_slug": slug,
+                "title": str(
+                    manifest_entry.get("title")
+                    or runtime_entry.get("title")
+                    or slug
+                ),
+                "content_status": content_status,
+                "translation_status": str(
+                    manifest_entry.get("translation_status")
+                    or runtime_entry.get("translation_status")
+                    or ""
+                ),
+                "approval_status": approval_status,
+                "review_status": review_status,
+                "source_type": str(
+                    runtime_entry.get("source_type")
+                    or manifest_entry.get("source_type")
+                    or ""
+                ),
+                "source_lane": str(
+                    runtime_entry.get("source_lane")
+                    or manifest_entry.get("source_lane")
+                    or ""
+                ),
+                "viewer_path": str(
+                    runtime_entry.get("viewer_path")
+                    or manifest_entry.get("viewer_path")
+                    or ""
+                ),
+                "source_url": str(
+                    runtime_entry.get("source_url")
+                    or manifest_entry.get("source_url")
+                    or ""
+                ),
+                "updated_at": str(
+                    runtime_entry.get("updated_at")
+                    or manifest_entry.get("updated_at")
+                    or ""
+                ),
+                "approval_state": str(
+                    runtime_entry.get("approval_state")
+                    or manifest_entry.get("approval_state")
+                    or approval_status
+                ),
+                "publication_state": str(
+                    runtime_entry.get("publication_state")
+                    or manifest_entry.get("publication_state")
+                    or ""
+                ),
+                "parser_backend": str(
+                    runtime_entry.get("parser_backend")
+                    or manifest_entry.get("parser_backend")
+                    or ""
+                ),
+                "boundary_truth": str(
+                    runtime_entry.get("boundary_truth")
+                    or manifest_entry.get("boundary_truth")
+                    or ""
+                ),
+                "runtime_truth_label": str(
+                    runtime_entry.get("runtime_truth_label")
+                    or manifest_entry.get("runtime_truth_label")
+                    or ""
+                ),
+                "boundary_badge": str(
+                    runtime_entry.get("boundary_badge")
+                    or manifest_entry.get("boundary_badge")
+                    or ""
+                ),
+                "current_source_basis": str(
+                    runtime_entry.get("current_source_basis")
+                    or manifest_entry.get("current_source_basis")
+                    or ""
+                ),
+                "current_source_label": str(
+                    runtime_entry.get("current_source_label")
+                    or manifest_entry.get("current_source_label")
+                    or ""
+                ),
+                "source_options": list(
+                    runtime_entry.get("source_options")
+                    if isinstance(runtime_entry.get("source_options"), list)
+                    else manifest_entry.get("source_options")
+                    if isinstance(manifest_entry.get("source_options"), list)
+                    else []
+                ),
+            }
+        )
+    return books
+
+
 def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str, object]:
     root = Path(root_dir).resolve()
     settings = load_settings(root)
@@ -132,6 +253,11 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
     runtime_report = _safe_read_json(settings.runtime_report_path)
     runtime_smoke_payload = _job_payload(gate_report, "runtime_smoke")
     source_books = source_approval_report.get("books") if isinstance(source_approval_report.get("books"), list) else []
+    if not source_books and manifest_by_slug:
+        # First-run merged repos can have curated gold datasets without the
+        # local approval report artifacts. Fall back to manifest + runtime
+        # registry so studio/library still expose the approved baseline.
+        source_books = _synthesized_source_books(root=root, manifest_by_slug=manifest_by_slug)
     known_books = {str(book.get("book_slug") or "").strip(): book for book in source_books if isinstance(book, dict) and str(book.get("book_slug") or "").strip()}
     active_queue = translation_lane_report.get("active_queue") if isinstance(translation_lane_report.get("active_queue"), list) else []
     known_book_rows = _build_known_books_section(source_books, manifest_by_slug=manifest_by_slug)
@@ -187,6 +313,7 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
     user_library_corpus_chunk_count = sum(int(book.get("chunk_count") or 0) for book in user_library_corpus_books)
     grade_breakdown_counter = Counter(_grade_label(book) for book in source_books)
     gold_books = [_simplify_book(book) for slug in manifest_by_slug for book in [known_books.get(slug)] if isinstance(book, dict) and _is_gold_book(book)]
+    approved_wiki_runtime_books = _build_approved_wiki_runtime_book_bucket(root, translation_lane_report=translation_lane_report)
     materialized_corpus_slugs = {str(row.get("book_slug") or "").strip() for row in chunk_rows if str(row.get("book_slug") or "").strip()}
     materialized_core_corpus_slugs = materialized_corpus_slugs & manifest_slugs
     extra_materialized_corpus_slugs = materialized_corpus_slugs - manifest_slugs
@@ -199,19 +326,43 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
     materialized_manualbook_slugs = {path.stem for path in all_playbook_files if path.stem not in materialized_derived_playbook_slugs}
     materialized_core_manualbook_slugs = materialized_manualbook_slugs & manifest_slugs
     extra_materialized_manualbook_slugs = materialized_manualbook_slugs - manifest_slugs
+    visible_runtime_slugs = materialized_core_corpus_slugs | materialized_core_manualbook_slugs
+    visible_gold_books = [
+        book for book in gold_books
+        if str(book.get("book_slug") or "").strip() in visible_runtime_slugs
+    ]
+    visible_known_book_rows = [
+        book for book in known_book_rows
+        if str(book.get("book_slug") or "").strip() in visible_runtime_slugs
+    ]
+    visible_core_corpus_books = [
+        book for book in core_corpus_books
+        if str(book.get("book_slug") or "").strip() in materialized_core_corpus_slugs
+    ]
+    visible_core_manualbooks = [
+        book for book in core_manualbooks
+        if str(book.get("book_slug") or "").strip() in materialized_core_manualbook_slugs
+    ]
+    approved_wiki_runtime_books = {
+        **approved_wiki_runtime_books,
+        "books": [
+            book for book in (approved_wiki_runtime_books.get("books") or [])
+            if str(book.get("book_slug") or "").strip() in visible_runtime_slugs
+        ],
+    }
+    approved_wiki_runtime_books["hidden_count"] = len(approved_wiki_runtime_books.get("hidden_books") or [])
     buyer_scope = source_bundle_quality_payload.get("buyer_scope") if isinstance(source_bundle_quality_payload.get("buyer_scope"), dict) else {}
     raw_manual_count = int(buyer_scope.get("raw_manual_count") or len(manifest_by_slug))
-    playable_asset_count = len(core_manualbooks) + len(extra_manualbooks) + len(derived_playbooks)
+    playable_asset_count = len(visible_core_manualbooks) + len(extra_manualbooks) + len(derived_playbooks)
     playable_asset_multiplication = {
         "raw_manual_count": raw_manual_count,
         "playable_asset_count": playable_asset_count,
         "delta_vs_raw_manual_count": playable_asset_count - raw_manual_count,
         "ratio_vs_raw_manual_count": round(playable_asset_count / raw_manual_count, 4) if raw_manual_count > 0 else 0.0,
     }
-    manual_book_library = _build_manual_book_library(core_manualbooks, extra_manualbooks)
+    manual_book_library = _build_manual_book_library(visible_core_manualbooks, extra_manualbooks)
     playbook_library = _build_playbook_library(derived_playbook_family_statuses)
     gold_candidate_books = _build_gold_candidate_book_bucket(root)
-    approved_wiki_runtime_books = _build_approved_wiki_runtime_book_bucket(root, translation_lane_report=translation_lane_report)
     navigation_backlog = _build_navigation_backlog_bucket(root)
     wiki_usage_signals = _build_wiki_usage_signal_bucket(root)
     product_gate = _build_product_gate_bucket(root)
@@ -276,10 +427,10 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
         "summary": {
             "gate_status": str(verdict.get("status") or "unknown"),
             "release_blocking": bool(verdict.get("release_blocking")),
-            "approved_runtime_count": selected_approved_runtime_count,
-            "known_book_count": int(source_approval_report.get("summary", {}).get("book_count") or len(source_books)),
-            "gold_book_count": len(gold_books),
-            "known_books_count": len(known_book_rows),
+            "approved_runtime_count": len(visible_runtime_slugs),
+            "known_book_count": len(visible_known_book_rows),
+            "gold_book_count": len(visible_gold_books),
+            "known_books_count": len(visible_known_book_rows),
             "queue_count": len(active_queue_rows),
             "active_queue_count": len(active_queue_rows),
             "high_value_focus_count": int(high_value_focus.get("count") or 0),
@@ -336,7 +487,7 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
         "grading": {
             "summary": source_approval_report.get("summary") if isinstance(source_approval_report.get("summary"), dict) else {},
             "grade_breakdown": [{"grade": grade, "count": count} for grade, count in sorted(grade_breakdown_counter.items(), key=lambda item: (-item[1], item[0]))],
-            "gold_books": gold_books,
+            "gold_books": visible_gold_books,
             "queue_books": active_queue_rows,
         },
         "evaluations": {
@@ -353,8 +504,8 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
         },
         "canonical_grade_source": canonical_grade_source,
         "source_of_truth_drift": source_of_truth_drift,
-        "corpus": {"selected_path": str(selected_chunks_path) if selected_chunks_path else "", "books": core_corpus_books},
-        "manualbooks": {"selected_dir": str(selected_playbook_dir) if selected_playbook_dir else "", "books": core_manualbooks},
+        "corpus": {"selected_path": str(selected_chunks_path) if selected_chunks_path else "", "books": visible_core_corpus_books},
+        "manualbooks": {"selected_dir": str(selected_playbook_dir) if selected_playbook_dir else "", "books": visible_core_manualbooks},
         "customer_pack_runtime_books": {"selected_dir": str(settings.customer_pack_books_dir.resolve()), "books": customer_pack_runtime_books},
         "user_library_books": {"selected_dir": str(settings.customer_pack_books_dir.resolve()), "books": user_library_books},
         "user_library_corpus": {"selected_dir": str(settings.customer_pack_corpus_dir.resolve()), "books": user_library_corpus_books},
@@ -376,11 +527,11 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
         "playbook_library": playbook_library,
         "materialization": {
             "manifest_book_count": len(manifest_by_slug),
-            "gold_book_count": len(gold_books),
-            "corpus_book_count": len(core_corpus_books),
-            "core_corpus_book_count": len(core_corpus_books),
-            "manualbook_book_count": len(core_manualbooks),
-            "core_manualbook_book_count": len(core_manualbooks),
+            "gold_book_count": len(visible_gold_books),
+            "corpus_book_count": len(visible_core_corpus_books),
+            "core_corpus_book_count": len(visible_core_corpus_books),
+            "manualbook_book_count": len(visible_core_manualbooks),
+            "core_manualbook_book_count": len(visible_core_manualbooks),
             "customer_pack_runtime_book_count": len(customer_pack_runtime_books),
             "user_library_book_count": len(user_library_books),
             "user_library_corpus_book_count": len(user_library_corpus_books),
@@ -410,14 +561,14 @@ def _build_data_control_room_payload_uncached(root_dir: str | Path) -> dict[str,
             "logical_counts_match": len(manifest_by_slug) == len(core_corpus_books) == len(core_manualbooks),
             "counts_match": len(manifest_by_slug) == len(gold_books) == len(materialized_core_corpus_slugs) == len(materialized_core_manualbook_slugs),
         },
-        "known_books": known_book_rows,
+        "known_books": visible_known_book_rows,
         "active_queue": active_queue_rows,
         "high_value_focus": high_value_focus,
         "report_paths": report_paths,
-        "gold_books": gold_books,
-        "corpus_book_status": core_corpus_books,
+        "gold_books": visible_gold_books,
+        "corpus_book_status": visible_core_corpus_books,
         "extra_corpus_book_status": extra_corpus_books,
-        "manualbook_status": core_manualbooks,
+        "manualbook_status": visible_core_manualbooks,
         "extra_manualbook_status": extra_manualbooks,
         "user_library_corpus_status": user_library_corpus_books,
         "topic_playbook_status": topic_playbooks,

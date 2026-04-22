@@ -30,7 +30,7 @@ from .graph_sidecar import (
     refresh_active_runtime_graph_artifacts,
 )
 from .manifest import read_manifest, write_manifest
-from .models import SOURCE_STATE_BLOCKED, SourceManifestEntry
+from .models import SOURCE_STATE_BLOCKED, SourceManifestEntry, chunk_corpus_bm25_row
 from .normalize import project_normalized_sections
 from .synthesis_lane import synthesis_lane_report_path, write_synthesis_lane_outputs
 
@@ -562,42 +562,6 @@ def _upsert_book_rows_for_slug(
     return kept + new_rows
 
 
-def _bm25_row(chunk_row: dict[str, object]) -> dict[str, object]:
-    chunk_type = str(chunk_row.get("chunk_type", "reference"))
-    return {
-        "chunk_id": chunk_row["chunk_id"],
-        "book_slug": chunk_row["book_slug"],
-        "chapter": chunk_row["chapter"],
-        "section": chunk_row["section"],
-        "anchor": chunk_row["anchor"],
-        "source_url": chunk_row["source_url"],
-        "viewer_path": chunk_row["viewer_path"],
-        "text": chunk_row["text"],
-        "section_path": list(chunk_row["section_path"]),
-        "chunk_type": chunk_type,
-        "source_id": chunk_row["source_id"],
-        "source_lane": chunk_row["source_lane"],
-        "source_type": chunk_row["source_type"],
-        "source_collection": chunk_row["source_collection"],
-        "product": chunk_row["product"],
-        "version": chunk_row["version"],
-        "locale": chunk_row["locale"],
-        "translation_status": chunk_row["translation_status"],
-        "review_status": chunk_row["review_status"],
-        "trust_score": chunk_row["trust_score"],
-        "semantic_role": (
-            "procedure"
-            if chunk_type in {"procedure", "command"}
-            else ("concept" if chunk_type == "concept" else "reference")
-        ),
-        "cli_commands": list(chunk_row.get("cli_commands", [])),
-        "error_strings": list(chunk_row.get("error_strings", [])),
-        "k8s_objects": list(chunk_row.get("k8s_objects", [])),
-        "operator_names": list(chunk_row.get("operator_names", [])),
-        "verification_hints": list(chunk_row.get("verification_hints", [])),
-    }
-
-
 def _upsert_playbook_payload_for_slug(
     path: Path,
     books_dir: Path,
@@ -645,8 +609,8 @@ def _apply_curated_gold(
     chunks = chunk_sections(sections, settings)
 
     normalized_rows = [section.to_dict() for section in sections]
-    chunk_rows = [chunk.to_dict() for chunk in chunks]
-    bm25_rows = [_bm25_row(chunk_row) for chunk_row in chunk_rows]
+    chunk_rows = [chunk.to_corpus_row() for chunk in chunks]
+    bm25_rows = [chunk_corpus_bm25_row(chunk_row) for chunk_row in chunk_rows]
 
     playbook_payload = project_playbook_document(document).to_dict()
     playbook_payload["quality_score"] = spec.trust_score

@@ -14,7 +14,7 @@ from .embedding import EmbeddingClient
 from .graph_sidecar import refresh_active_runtime_graph_artifacts
 from .manifest import read_manifest, runtime_catalog_entries
 from .metadata_extraction import extract_section_metadata
-from .models import ChunkRecord, NormalizedSection, SourceManifestEntry
+from .models import ChunkRecord, NormalizedSection, SourceManifestEntry, chunk_corpus_bm25_row
 from .normalize import extract_document_ast, project_normalized_sections
 from .pipeline import _entry_with_inferred_runtime_status
 from .qdrant_store import ensure_collection, upsert_chunks
@@ -97,42 +97,6 @@ def _write_official_playbook_payloads(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-
-
-def _bm25_row(chunk_row: dict[str, Any]) -> dict[str, Any]:
-    chunk_type = str(chunk_row.get("chunk_type", "reference"))
-    return {
-        "chunk_id": chunk_row["chunk_id"],
-        "book_slug": chunk_row["book_slug"],
-        "chapter": chunk_row["chapter"],
-        "section": chunk_row["section"],
-        "anchor": chunk_row["anchor"],
-        "source_url": chunk_row["source_url"],
-        "viewer_path": chunk_row["viewer_path"],
-        "text": chunk_row["text"],
-        "section_path": list(chunk_row.get("section_path", [])),
-        "chunk_type": chunk_type,
-        "source_id": chunk_row["source_id"],
-        "source_lane": chunk_row["source_lane"],
-        "source_type": chunk_row["source_type"],
-        "source_collection": chunk_row["source_collection"],
-        "product": chunk_row["product"],
-        "version": chunk_row["version"],
-        "locale": chunk_row["locale"],
-        "translation_status": chunk_row["translation_status"],
-        "review_status": chunk_row["review_status"],
-        "trust_score": chunk_row["trust_score"],
-        "semantic_role": (
-            "procedure"
-            if chunk_type in {"procedure", "command"}
-            else ("concept" if chunk_type == "concept" else "reference")
-        ),
-        "cli_commands": list(chunk_row.get("cli_commands", [])),
-        "error_strings": list(chunk_row.get("error_strings", [])),
-        "k8s_objects": list(chunk_row.get("k8s_objects", [])),
-        "operator_names": list(chunk_row.get("operator_names", [])),
-        "verification_hints": list(chunk_row.get("verification_hints", [])),
-    }
 
 
 def _chunk_records(rows: list[dict[str, Any]]) -> list[ChunkRecord]:
@@ -410,14 +374,14 @@ def materialize_runtime_corpus_from_playbooks(
     derived_summary = materialize_derived_playbooks(settings)
     derived_sections = _project_materialized_derived_sections(settings)
     derived_normalized_rows = [section.to_dict() for section in derived_sections]
-    derived_chunk_rows = [chunk.to_dict() for chunk in chunk_sections(derived_sections, settings)]
+    derived_chunk_rows = [chunk.to_corpus_row() for chunk in chunk_sections(derived_sections, settings)]
 
     merged_normalized_rows = retained_normalized_rows + official_normalized_rows + derived_normalized_rows
     merged_chunk_rows = retained_chunk_rows + official_chunk_rows + derived_chunk_rows
 
     _write_jsonl_rows(settings.normalized_docs_path, merged_normalized_rows)
     _write_jsonl_rows(settings.chunks_path, merged_chunk_rows)
-    _write_jsonl_rows(settings.bm25_corpus_path, [_bm25_row(row) for row in merged_chunk_rows])
+    _write_jsonl_rows(settings.bm25_corpus_path, [chunk_corpus_bm25_row(row) for row in merged_chunk_rows])
 
     graph_refresh = refresh_active_runtime_graph_artifacts(
         settings,
@@ -504,7 +468,7 @@ def materialize_runtime_catalog_library(
             errors.append({"book_slug": entry.book_slug, "message": str(exc)})
 
     official_normalized_rows = [section.to_dict() for section in all_sections]
-    official_chunk_rows = [chunk.to_dict() for chunk in chunk_sections(all_sections, settings)]
+    official_chunk_rows = [chunk.to_corpus_row() for chunk in chunk_sections(all_sections, settings)]
 
     retained_normalized_rows = _retain_non_official_rows(_read_jsonl_rows(settings.normalized_docs_path))
     retained_chunk_rows = _retain_non_official_rows(_read_jsonl_rows(settings.chunks_path))
@@ -532,14 +496,14 @@ def materialize_runtime_catalog_library(
     derived_summary = materialize_derived_playbooks(settings)
     derived_sections = _project_materialized_derived_sections(settings)
     derived_normalized_rows = [section.to_dict() for section in derived_sections]
-    derived_chunk_rows = [chunk.to_dict() for chunk in chunk_sections(derived_sections, settings)]
+    derived_chunk_rows = [chunk.to_corpus_row() for chunk in chunk_sections(derived_sections, settings)]
 
     merged_normalized_rows = retained_normalized_rows + official_normalized_rows + derived_normalized_rows
     merged_chunk_rows = retained_chunk_rows + official_chunk_rows + derived_chunk_rows
 
     _write_jsonl_rows(settings.normalized_docs_path, merged_normalized_rows)
     _write_jsonl_rows(settings.chunks_path, merged_chunk_rows)
-    _write_jsonl_rows(settings.bm25_corpus_path, [_bm25_row(row) for row in merged_chunk_rows])
+    _write_jsonl_rows(settings.bm25_corpus_path, [chunk_corpus_bm25_row(row) for row in merged_chunk_rows])
 
     graph_refresh = refresh_active_runtime_graph_artifacts(
         settings,

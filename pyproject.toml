@@ -11,11 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
   "beautifulsoup4>=4.12",
   "docling>=2.84.0",
-  "jsonschema>=4.26",
   "markitdown[docx,pdf,pptx,xlsx]>=0.1.5",
   "neo4j>=5.28",
-  "networkx>=3.5",
-  "onnxruntime>=1.20",
   "pypdf>=6.0",
   "pypdfium2>=4.30",
   "rapidocr>=3.7.0",

@@ -8,11 +8,16 @@ from pathlib import Path
 
 from play_book_studio.answering.answerer import ChatAnswerer
 
+from .data_control_room import build_data_control_room_payload
 from .server_handler_factory import _build_handler
 from .sessions import ChatSession, SessionStore
 
 
-def _warmup_runtime_components(answerer: ChatAnswerer) -> None:
+def _warmup_runtime_components(answerer: ChatAnswerer, root_dir: Path) -> None:
+    try:
+        build_data_control_room_payload(root_dir)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[server] data-control-room warmup failed: {exc}")
     reranker = getattr(getattr(answerer, "retriever", None), "reranker", None)
     if reranker is None:
         return
@@ -25,13 +30,10 @@ def _warmup_runtime_components(answerer: ChatAnswerer) -> None:
         print(f"[server] reranker warmed: {reranker.model_name}")
 
 
-def _start_runtime_warmup(answerer: ChatAnswerer) -> threading.Thread | None:
-    reranker = getattr(getattr(answerer, "retriever", None), "reranker", None)
-    if reranker is None:
-        return None
+def _start_runtime_warmup(answerer: ChatAnswerer, root_dir: Path) -> threading.Thread:
     thread = threading.Thread(
         target=_warmup_runtime_components,
-        args=(answerer,),
+        args=(answerer, root_dir),
         name="pbs-runtime-warmup",
         daemon=True,
     )
@@ -52,7 +54,7 @@ def serve(
     server = ThreadingHTTPServer((host, port), handler)
     backend_url = f"http://{host}:{port}"
     print(f"Play Book Studio runtime/API server running at {backend_url}")
-    _start_runtime_warmup(answerer)
+    _start_runtime_warmup(answerer, root_dir)
     if open_browser:
         import webbrowser
 

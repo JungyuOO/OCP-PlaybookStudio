@@ -281,7 +281,7 @@ def generate_translation_drafts(
             playbook_document = project_playbook_document(document)
 
             normalized_by_slug[entry.book_slug] = [section.to_dict() for section in sections]
-            chunks_by_slug[entry.book_slug] = [chunk.to_dict() for chunk in chunks]
+            chunks_by_slug[entry.book_slug] = [chunk.to_corpus_row() for chunk in chunks]
             playbooks_by_slug[entry.book_slug] = playbook_document.to_dict()
             _materialize_outputs(
                 settings,

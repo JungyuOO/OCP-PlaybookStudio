@@ -38,6 +38,7 @@ from .models import (
     NormalizedSection,
     PipelineLog,
     SourceManifestEntry,
+    chunk_corpus_bm25_row,
 )
 from .normalize import extract_document_ast, project_normalized_sections
 from .playbook_materialization import (
@@ -326,44 +327,12 @@ def run_ingestion_pipeline(
     for book_slug, count in chunk_counts.items():
         log.upsert_book_stat(book_slug, chunk_count=count)
     _progress(f"[chunk] total_chunks={len(chunks)}")
-    chunk_rows = [chunk.to_dict() for chunk in chunks]
+    chunk_rows = [chunk.to_corpus_row() for chunk in chunks]
     _write_jsonl_targets(
         (settings.chunks_path,),
         chunk_rows,
     )
-    bm25_rows = [
-        {
-            "chunk_id": chunk.chunk_id,
-            "book_slug": chunk.book_slug,
-            "chapter": chunk.chapter,
-            "section": chunk.section,
-            "anchor": chunk.anchor,
-            "source_url": chunk.source_url,
-            "viewer_path": chunk.viewer_path,
-            "text": chunk.text,
-            "section_path": list(chunk.section_path),
-            "chunk_type": chunk.chunk_type,
-            "source_id": chunk.source_id,
-            "source_lane": chunk.source_lane,
-            "source_type": chunk.source_type,
-            "source_collection": chunk.source_collection,
-            "product": chunk.product,
-            "version": chunk.version,
-            "locale": chunk.locale,
-            "translation_status": chunk.translation_status,
-            "review_status": chunk.review_status,
-            "trust_score": chunk.trust_score,
-            "semantic_role": "procedure" if chunk.chunk_type in {"procedure", "command"} else (
-                "concept" if chunk.chunk_type == "concept" else "reference"
-            ),
-            "cli_commands": list(chunk.cli_commands),
-            "error_strings": list(chunk.error_strings),
-            "k8s_objects": list(chunk.k8s_objects),
-            "operator_names": list(chunk.operator_names),
-            "verification_hints": list(chunk.verification_hints),
-        }
-        for chunk in chunks
-    ]
+    bm25_rows = [chunk_corpus_bm25_row(row) for row in chunk_rows]
     _write_jsonl_targets(
         (settings.bm25_corpus_path,),
         bm25_rows,

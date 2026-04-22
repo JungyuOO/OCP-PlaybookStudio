@@ -79,34 +79,61 @@ def _test_server(root: Path):
         thread.join(timeout=5)
 
 
-def test_start_runtime_warmup_skips_when_reranker_missing() -> None:
-    answerer = SimpleNamespace(retriever=SimpleNamespace(reranker=None))
+def test_start_runtime_warmup_starts_daemon_thread_when_reranker_missing() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        answerer = SimpleNamespace(retriever=SimpleNamespace(reranker=None))
+        created_threads: list[_FakeThread] = []
 
-    with patch("play_book_studio.app.server.threading.Thread") as thread_mock:
-        thread = server._start_runtime_warmup(answerer)
+        def _build_thread(*, target, args, name, daemon):
+            thread = _FakeThread(target=target, args=args, name=name, daemon=daemon)
+            created_threads.append(thread)
+            return thread
 
-    assert thread is None
-    thread_mock.assert_not_called()
+        with patch("play_book_studio.app.server.threading.Thread", side_effect=_build_thread):
+            thread = server._start_runtime_warmup(answerer, root)
+
+        assert thread is created_threads[0]
+        assert thread.target is server._warmup_runtime_components
+        assert thread.args == (answerer, root)
+        assert thread.name == "pbs-runtime-warmup"
+        assert thread.daemon is True
+        assert thread.start_calls == 1
 
 
 def test_start_runtime_warmup_starts_daemon_thread_when_reranker_present() -> None:
-    answerer = SimpleNamespace(retriever=SimpleNamespace(reranker=_FakeReranker()))
-    created_threads: list[_FakeThread] = []
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        answerer = SimpleNamespace(retriever=SimpleNamespace(reranker=_FakeReranker()))
+        created_threads: list[_FakeThread] = []
 
-    def _build_thread(*, target, args, name, daemon):
-        thread = _FakeThread(target=target, args=args, name=name, daemon=daemon)
-        created_threads.append(thread)
-        return thread
+        def _build_thread(*, target, args, name, daemon):
+            thread = _FakeThread(target=target, args=args, name=name, daemon=daemon)
+            created_threads.append(thread)
+            return thread
 
-    with patch("play_book_studio.app.server.threading.Thread", side_effect=_build_thread):
-        thread = server._start_runtime_warmup(answerer)
+        with patch("play_book_studio.app.server.threading.Thread", side_effect=_build_thread):
+            thread = server._start_runtime_warmup(answerer, root)
 
-    assert thread is created_threads[0]
-    assert thread.target is server._warmup_runtime_components
-    assert thread.args == (answerer,)
-    assert thread.name == "pbs-runtime-warmup"
-    assert thread.daemon is True
-    assert thread.start_calls == 1
+        assert thread is created_threads[0]
+        assert thread.target is server._warmup_runtime_components
+        assert thread.args == (answerer, root)
+        assert thread.name == "pbs-runtime-warmup"
+        assert thread.daemon is True
+        assert thread.start_calls == 1
+
+
+def test_warmup_runtime_components_primes_data_control_room_and_reranker() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        reranker = _FakeReranker()
+        answerer = SimpleNamespace(retriever=SimpleNamespace(reranker=reranker))
+
+        with patch("play_book_studio.app.server.build_data_control_room_payload") as payload_mock:
+            server._warmup_runtime_components(answerer, root)
+
+        payload_mock.assert_called_once_with(root)
+        assert reranker.warmup_calls == 1
 
 
 def test_spa_deep_links_return_index_html_for_pbs_surfaces() -> None:
